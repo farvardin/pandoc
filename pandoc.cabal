@@ -79,6 +79,7 @@ data-files:
                  data/templates/default.asciidoctor
                  data/templates/default.haddock
                  data/templates/default.textile
+                 data/templates/default.txt2tags
                  data/templates/default.org
                  data/templates/default.epub2
                  data/templates/default.epub3
@@ -535,7 +536,7 @@ library
                    Text.Pandoc.Writers.AsciiDoc,
                    Text.Pandoc.Writers.Custom,
                    Text.Pandoc.Writers.Textile,
-				   Text.Pandoc.Writers.Txt2Tags,
+                   Text.Pandoc.Writers.Txt2Tags,
                    Text.Pandoc.Writers.MediaWiki,
                    Text.Pandoc.Writers.DokuWiki,
                    Text.Pandoc.Writers.XWiki,
