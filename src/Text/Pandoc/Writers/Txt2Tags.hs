@@ -139,7 +139,7 @@ blockToTxt2Tags _ b@(RawBlock f str)
   | otherwise              = "" <$
          report (BlockNotRendered b)
 
-blockToTxt2Tags _ HorizontalRule = return "\n========\n"
+blockToTxt2Tags _ HorizontalRule = return "\n---------------\n"
 
 blockToTxt2Tags opts (Header level _ inlines) = do
   -- emphasis, links etc. not allowed in headers, apparently,
