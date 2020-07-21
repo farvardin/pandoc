@@ -1,10 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Txt2Tags
-   Copyright   : Copyright (C) 2008-2020 John MacFarlane
+   Copyright   : Copyright (C) 2020 Eric Forgeot, based on John MacFarlane dokuwiki writer
    License     : GNU GPL, version 2 or above
 
-   Maintainer  : Clare Macrae <clare.macrae@googlemail.com>
+   Maintainer  : Eric Forgeot - https://github.com/farvardin/
    Stability   : alpha
    Portability : portable
 
@@ -14,11 +14,14 @@ Txt2Tags:  <https://www.Txt2Tags.org/>
 -}
 
 {-
-    [ ] Implement nested blockquotes (currently only ever does one level)
-    [x] Implement alignment of text in tables
-    [ ] Implement comments
-    [ ] Work through the Txt2Tags spec, and check I've not missed anything out
-    [ ] Remove dud/duplicate code
+   It works for most of the syntax. But some improvements or fix can be made:
+   - On lists (2 extra lines to terminate a list)
+   - On the 3 lines header at the begining of a file
+   - Definition lists are broken
+   - Tables could be improved
+   - Some formats make better results than others (html is ok, md is somehow broken)
+   - code related to dokuwiki only could be removed
+   - a test case should be made
 -}
 
 module Text.Pandoc.Writers.Txt2Tags ( writeTxt2Tags ) where
