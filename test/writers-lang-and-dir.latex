@@ -5,8 +5,8 @@
 \documentclass[
   english,
 ]{article}
+\usepackage{amsmath,amssymb}
 \usepackage{lmodern}
-\usepackage{amssymb,amsmath}
 \usepackage{ifxetex,ifluatex}
 \ifnum 0\ifxetex 1\fi\ifluatex 1\fi=0 % if pdftex
   \usepackage[T1]{fontenc}
@@ -55,7 +55,10 @@
   \setotherlanguage[]{spanish}
   \setotherlanguage[]{french}
 \else
-  \usepackage[shorthands=off,ngerman,british,nswissgerman,spanish,french,main=english]{babel}
+  \usepackage[ngerman,british,nswissgerman,spanish,french,main=english]{babel}
+% get rid of language-specific shorthands (see #6817):
+\let\LanguageShortHands\languageshorthands
+\def\languageshorthands#1{}
   \newcommand{\textgerman}[2][]{\foreignlanguage{ngerman}{#2}}
   \newenvironment{german}[2][]{\begin{otherlanguage}{ngerman}}{\end{otherlanguage}}
   \newcommand{\textenglish}[2][]{\foreignlanguage{british}{#2}}
@@ -65,6 +68,9 @@
   \AddBabelHook{spanish}{afterextras}{\renewcommand{\textspanish}[2][]{\foreignlanguage{spanish}{##2}}}
   \newcommand{\textfrench}[2][]{\foreignlanguage{french}{#2}}
   \newenvironment{french}[2][]{\begin{otherlanguage}{french}}{\end{otherlanguage}}
+\fi
+\ifluatex
+  \usepackage{selnolig}  % disable illegal ligatures
 \fi
 \ifxetex
   % Load bidi as late as possible as it modifies e.g. graphicx

@@ -317,7 +317,7 @@ interwikiToUrl "wpes" page = "https://es.wikipedia.org/wiki/" <> page
 interwikiToUrl "wpfr" page = "https://fr.wikipedia.org/wiki/" <> page
 interwikiToUrl "wpjp" page = "https://jp.wikipedia.org/wiki/" <> page
 interwikiToUrl "wppl" page = "https://pl.wikipedia.org/wiki/" <> page
-interwikiToUrl _ page = "https://www.google.com/search?q=" <> page <> "&btnI=lucky"
+interwikiToUrl unknown page = unknown <> ">" <> page
 
 linkText :: PandocMonad m => DWParser m B.Inlines
 linkText = parseLink fromRaw "[[" "]]"
@@ -472,7 +472,7 @@ table = do
                             else ([], rows)
   let attrs = (AlignDefault, ColWidthDefault) <$ transpose rows
   let toRow = Row nullAttr . map B.simpleCell
-      toHeaderRow l = if null l then [] else [toRow l]
+      toHeaderRow l = [toRow l | not (null l)]
   pure $ B.table B.emptyCaption
                  attrs
                  (TableHead nullAttr $ toHeaderRow headerRow)

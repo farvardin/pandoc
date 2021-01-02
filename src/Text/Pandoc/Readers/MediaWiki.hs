@@ -231,7 +231,7 @@ table = do
                           then (hdr, rows')
                           else (replicate cols mempty, hdr:rows')
   let toRow = Row nullAttr . map B.simpleCell
-      toHeaderRow l = if null l then [] else [toRow l]
+      toHeaderRow l = [toRow l | not (null l)]
   return $ B.table (B.simpleCaption $ B.plain caption)
                    cellspecs
                    (TableHead nullAttr $ toHeaderRow headers)
@@ -283,7 +283,7 @@ tableCaption = try $ do
   skipSpaces
   sym "|+"
   optional (try $ parseAttrs *> skipSpaces *> char '|' *> blanklines)
-  (trimInlines . mconcat) <$>
+  trimInlines . mconcat <$>
     many (notFollowedBy (cellsep <|> rowsep) *> inline)
 
 tableRow :: PandocMonad m => MWParser m [((Alignment, Double), Blocks)]
@@ -434,7 +434,7 @@ defListItem :: PandocMonad m => MWParser m (Inlines, [Blocks])
 defListItem = try $ do
   terms <- mconcat . intersperse B.linebreak <$> many defListTerm
   -- we allow dd with no dt, or dt with no dd
-  defs  <- if B.isNull terms
+  defs  <- if null terms
               then notFollowedBy
                     (try $ skipMany1 (char ':') >> string "<math>") *>
                        many1 (listItem ':')
@@ -678,19 +678,17 @@ url = do
 -- | Parses a list of inlines between start and end delimiters.
 inlinesBetween :: (PandocMonad m, Show b) => MWParser m a -> MWParser m b -> MWParser m Inlines
 inlinesBetween start end =
-  (trimInlines . mconcat) <$> try (start >> many1Till inner end)
-    where inner      = innerSpace <|> (notFollowedBy' (() <$ whitespace) >> inline)
-          innerSpace = try $ whitespace <* notFollowedBy' end
+  trimInlines . mconcat <$> try (start >> many1Till inline end)
 
 emph :: PandocMonad m => MWParser m Inlines
 emph = B.emph <$> nested (inlinesBetween start end)
-    where start = sym "''" >> lookAhead nonspaceChar
+    where start = sym "''"
           end   = try $ notFollowedBy' (() <$ strong) >> sym "''"
 
 strong :: PandocMonad m => MWParser m Inlines
 strong = B.strong <$> nested (inlinesBetween start end)
-    where start = sym "'''" >> lookAhead nonspaceChar
-          end   = try $ sym "'''"
+    where start = sym "'''"
+          end   = sym "'''"
 
 doubleQuotes :: PandocMonad m => MWParser m Inlines
 doubleQuotes = do

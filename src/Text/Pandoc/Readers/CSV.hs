@@ -2,7 +2,7 @@
 
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
-   Module      : Text.Pandoc.Readers.RST
+   Module      : Text.Pandoc.Readers.CSV
    Copyright   : Copyright (C) 2006-2020 John MacFarlane
    License     : GNU GPL, version 2 or above
 
@@ -39,7 +39,7 @@ readCSV _opts s =
              numcols = length r
              toplain = B.simpleCell . B.plain . B.text . T.strip
              toRow = Row nullAttr . map toplain
-             toHeaderRow l = if null l then [] else [toRow l]
+             toHeaderRow l = [toRow l | not (null l)]
              hdrs = toHeaderRow r
              rows = map toRow rs
              aligns = replicate numcols AlignDefault

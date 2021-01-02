@@ -35,7 +35,7 @@ simpleTable'' capt spec headers rows
           (TableFoot nullAttr [])
   where
     toRow = Row nullAttr . map simpleCell
-    toHeaderRow l = if null l then [] else [toRow l]
+    toHeaderRow l = [toRow l | not (null l)]
 
 tests :: [TestTree]
 tests =
@@ -167,7 +167,7 @@ tests =
         ]
 
   , "Table with caption" =:
-      T.unlines [ "#+CAPTION: Hitchhiker's Multiplication Table"
+      T.unlines [ "#+caption: Hitchhiker's Multiplication Table"
                 , "| x |  6 |"
                 , "| 9 | 42 |"
                 ] =?>
@@ -180,7 +180,7 @@ tests =
         ]
 
   , "named table" =:
-      T.unlines [ "#+NAME: x-marks-the-spot"
+      T.unlines [ "#+name: x-marks-the-spot"
                 , "| x |"
                 ] =?>
       divWith ("x-marks-the-spot", mempty, mempty)

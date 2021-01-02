@@ -122,7 +122,7 @@ data OrgParserState = OrgParserState
   , orgMacros                    :: M.Map Text Macro
   }
 
-data OrgParserLocal = OrgParserLocal
+newtype OrgParserLocal = OrgParserLocal
   { orgLocalQuoteContext :: QuoteContext
   }
 
@@ -257,9 +257,12 @@ data ExportSettings = ExportSettings
   , exportWithAuthor       :: Bool -- ^ Include author in final meta-data
   , exportWithCreator      :: Bool -- ^ Include creator in final meta-data
   , exportWithEmail        :: Bool -- ^ Include email in final meta-data
+  , exportWithEntities     :: Bool -- ^ Include MathML-like entities
+  , exportWithFootnotes    :: Bool -- ^ Include footnotes
   , exportWithLatex        :: TeXExport -- ^ Handling of raw TeX commands
   , exportWithPlanning     :: Bool -- ^ Keep planning info after headlines
   , exportWithTags         :: Bool -- ^ Keep tags as part of headlines
+  , exportWithTables       :: Bool -- ^ Include tables
   , exportWithTodoKeywords :: Bool -- ^ Keep TODO keywords in headers
   }
 
@@ -279,8 +282,11 @@ defaultExportSettings = ExportSettings
   , exportWithAuthor = True
   , exportWithCreator = True
   , exportWithEmail = True
+  , exportWithEntities = True
+  , exportWithFootnotes = True
   , exportWithLatex = TeXExport
   , exportWithPlanning = False
   , exportWithTags = True
+  , exportWithTables = True
   , exportWithTodoKeywords = True
   }

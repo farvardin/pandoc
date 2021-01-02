@@ -47,9 +47,9 @@ exportSetting = choice
   , booleanSetting "creator" (\val es -> es { exportWithCreator = val })
   , complementableListSetting "d" (\val es -> es { exportDrawers = val })
   , ignoredSetting "date"
-  , ignoredSetting "e"
+  , booleanSetting "e" (\val es -> es { exportWithEntities = val })
   , booleanSetting "email" (\val es -> es { exportWithEmail = val })
-  , ignoredSetting "f"
+  , booleanSetting "f" (\val es -> es { exportWithFootnotes = val })
   , integerSetting "H" (\val es -> es { exportHeadlineLevels = val })
   , ignoredSetting "inline"
   , ignoredSetting "num"
@@ -64,7 +64,7 @@ exportSetting = choice
   , ignoredSetting "title"
   , ignoredSetting "toc"
   , booleanSetting "todo" (\val es -> es { exportWithTodoKeywords = val })
-  , ignoredSetting "|"
+  , booleanSetting "|" (\val es -> es { exportWithTables = val })
   , ignoreAndWarn
   ] <?> "export setting"
 

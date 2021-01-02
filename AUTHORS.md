@@ -1,11 +1,13 @@
 # Contributors
 
 - Anabra
+- Aner Lucero
 - Arata Mizuki
 - Arfon Smith
 - Aaron Wolen
 - Albert Krewinkel
 - Alex Ivkin
+- Alex Toldaiev
 - Alex Vong
 - Alexander Kondratskiy
 - Alexander Krotov
@@ -17,6 +19,7 @@
 - Anders Waldenborg
 - Andreas Lööw
 - Andrew Dunning
+- Andy Morris
 - Antoine Latter
 - Antonio Terceiro
 - Arata Mizuki
@@ -31,6 +34,7 @@
 - Beni Cherniavsky-Paskin
 - Benoit Schweblin
 - Bjorn Buckwalter
+- Blake Eryx
 - Bradley Kuhn
 - Brent Yorgey
 - Brian Leung
@@ -62,10 +66,13 @@
 - Denis Laxalde
 - Denis Maier
 - Derek Chen-Becker
+- Diego Balseiro
 - Dmitry Pogodin
+- Dmitry Volodin
 - Douglas Calvert
 - Eigil Rischel
 - Emanuel Evans
+- Emerson Harkin
 - Emily Eisenberg
 - Eric Kow
 - Eric Seidel
@@ -99,6 +106,7 @@
 - Hubert Plociniczak
 - Ian Max Andolina
 - Igor Khorlo
+- Igor Pashev
 - Ilya V. Portnov
 - Ivan Trubach
 - Ivo Clarysse
@@ -112,6 +120,7 @@
 - Jamie F. Olson
 - Jan Larres
 - Jan Schulz
+- Jan Tojnar
 - Jan-Otto Kröpke
 - Jason Ronallo
 - Jeff Arnold
@@ -119,6 +128,7 @@
 - Jens Getreu
 - Jens Petersen
 - Jeroen de Haas
+- Jerry Sky
 - Jesse Rosenthal
 - Joe Hermaszewski
 - Joe Hillenbrand
@@ -149,6 +159,7 @@
 - Lars-Dominik Braun
 - Laurent P. René de Cotret
 - Leif Metcalf
+- Leonard Rosenthol
 - Lila
 - Lucas Escot
 - Luke Plant
@@ -172,6 +183,7 @@
 - Merijn Verstraaten
 - Michael Beaumont
 - Michael Chladek
+- Michael Hoffmann
 - Michael Peyton Jones
 - Michael Reed
 - Michael Snoyman
@@ -220,6 +232,7 @@
 - Shahbaz Youssefi
 - Shaun Attfield
 - Shim Myeongseob
+- Shin Sang-jae
 - Sidarth Kapur
 - Sidharth Kapur
 - Simon Hengel
@@ -256,15 +269,19 @@
 - Yoan Blanc
 - Yuchen Pei
 - Zihang Chen
+- a-vrma
 - andrebauer
+- argent0
 - blmage
 - bucklereed
 - bumper314
 - chinapedia
+- cholonam
 - csforste
 - dbecher-ito
 - d-dorazio
 - ebiim
+- favonia
 - infinity0x
 - jeongminkim-islab
 - kaizshang91
@@ -282,7 +299,12 @@
 - rski
 - shreevatsa.public
 - takahashim
+- taotieren
+- TEC
 - tgkokk
+- the-solipsist
+- timo-a
 - thsutton
 - vijayphoenix
 - wiefling
+- wuffi

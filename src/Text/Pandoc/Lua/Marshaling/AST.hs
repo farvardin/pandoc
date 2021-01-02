@@ -170,7 +170,7 @@ pushBlock = \case
   Plain blcks              -> pushViaConstructor "Plain" blcks
   RawBlock f cs            -> pushViaConstructor "RawBlock" f cs
   Table attr blkCapt specs thead tbody tfoot ->
-    pushViaConstructor "Table" attr blkCapt specs thead tbody tfoot
+    pushViaConstructor "Table" blkCapt specs thead tbody tfoot attr
 
 -- | Return the value at the given index as block if possible.
 peekBlock :: StackIndex -> Lua Block
@@ -230,9 +230,7 @@ peekCaption idx = do
 instance Peekable ColWidth where
   peek idx = do
     width <- Lua.fromOptional <$> Lua.peek idx
-    return $ case width of
-      Nothing -> ColWidthDefault
-      Just w  -> ColWidth w
+    return $ maybe ColWidthDefault ColWidth width
 
 instance Pushable ColWidth where
   push = \case
@@ -262,7 +260,7 @@ instance Peekable TableBody where
     return $ TableBody attr (RowHeadColumns rowHeadColumns) head' body
 
 instance Pushable TableHead where
-  push (TableHead attr cells) = Lua.push (attr, cells)
+  push (TableHead attr rows) = Lua.push (attr, rows)
 
 instance Peekable TableHead where
   peek = fmap (uncurry TableHead) . Lua.peek

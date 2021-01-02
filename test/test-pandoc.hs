@@ -37,12 +37,14 @@ import qualified Tests.Writers.JATS
 import qualified Tests.Writers.Jira
 import qualified Tests.Writers.LaTeX
 import qualified Tests.Writers.Markdown
+import qualified Tests.Writers.Ms
 import qualified Tests.Writers.Muse
 import qualified Tests.Writers.Native
 import qualified Tests.Writers.Org
 import qualified Tests.Writers.Plain
 import qualified Tests.Writers.Powerpoint
 import qualified Tests.Writers.RST
+import qualified Tests.Writers.AnnotatedTable
 import qualified Tests.Writers.TEI
 import Tests.Helpers (findPandoc)
 import Text.Pandoc.Shared (inDirectory)
@@ -70,6 +72,8 @@ tests pandocPath = testGroup "pandoc tests"
           , testGroup "Muse" Tests.Writers.Muse.tests
           , testGroup "FB2" Tests.Writers.FB2.tests
           , testGroup "PowerPoint" Tests.Writers.Powerpoint.tests
+          , testGroup "Ms" Tests.Writers.Ms.tests
+          , testGroup "AnnotatedTable" Tests.Writers.AnnotatedTable.tests
           ]
         , testGroup "Readers"
           [ testGroup "LaTeX" Tests.Readers.LaTeX.tests

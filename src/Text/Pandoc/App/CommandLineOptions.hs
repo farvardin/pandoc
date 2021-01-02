@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP                 #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE OverloadedStrings   #-}
@@ -282,21 +283,24 @@ options =
     , Option "H" ["include-in-header"]
                  (ReqArg
                   (\arg opt -> return opt{ optIncludeInHeader =
-                                             optIncludeInHeader opt ++ [arg] })
+                                             optIncludeInHeader opt ++
+                                             [normalizePath arg] })
                   "FILE")
                  "" -- "File to include at end of header (implies -s)"
 
     , Option "B" ["include-before-body"]
                  (ReqArg
                   (\arg opt -> return opt{ optIncludeBeforeBody =
-                                            optIncludeBeforeBody opt ++ [arg] })
+                                            optIncludeBeforeBody opt ++
+                                            [normalizePath arg] })
                   "FILE")
                  "" -- "File to include before document body"
 
     , Option "A" ["include-after-body"]
                  (ReqArg
                   (\arg opt -> return opt{ optIncludeAfterBody =
-                                            optIncludeAfterBody opt ++ [arg] })
+                                            optIncludeAfterBody opt ++
+                                            [normalizePath arg] })
                   "FILE")
                  "" -- "File to include after document body"
 
@@ -308,7 +312,8 @@ options =
     , Option "" ["highlight-style"]
                 (ReqArg
                  (\arg opt ->
-                     return opt{ optHighlightStyle = Just $ T.pack arg })
+                     return opt{ optHighlightStyle = Just $
+                                 T.pack $ normalizePath arg })
                  "STYLE|FILE")
                  "" -- "Style for highlighted code"
 
@@ -396,7 +401,7 @@ options =
     , Option "" ["reference-doc"]
                  (ReqArg
                   (\arg opt ->
-                    return opt { optReferenceDoc = Just arg })
+                    return opt { optReferenceDoc = Just $ normalizePath arg })
                   "FILE")
                  "" -- "Path of custom reference doc"
 
@@ -421,7 +426,8 @@ options =
 
     , Option "" ["abbreviations"]
                 (ReqArg
-                 (\arg opt -> return opt { optAbbreviations = Just arg })
+                 (\arg opt -> return opt { optAbbreviations =
+                                            Just $ normalizePath arg })
                 "FILE")
                 "" -- "Specify file for custom abbreviations"
 
@@ -523,8 +529,25 @@ options =
 
     , Option "" ["atx-headers"]
                  (NoArg
-                  (\opt -> return opt { optSetextHeaders = False } ))
+                  (\opt -> do
+                    deprecatedOption "--atx-headers"
+                      "Use --markdown-headings=atx instead."
+                    return opt { optSetextHeaders = False } ))
                  "" -- "Use atx-style headers for markdown"
+
+    , Option "" ["markdown-headings"]
+                  (ReqArg
+                    (\arg opt -> do
+                      headingFormat <- case arg of
+                        "setext" -> pure True
+                        "atx" -> pure False
+                        _ -> E.throwIO $ PandocOptionError $ T.pack
+                          ("Unknown markdown heading format: " ++ arg ++
+                            ". Expecting atx or setext")
+                      pure opt { optSetextHeaders = headingFormat }
+                    )
+                  "setext|atx")
+                  ""
 
     , Option "" ["listings"]
                  (NoArg
@@ -606,21 +629,24 @@ options =
                  (ReqArg
                   (\arg opt ->
                      return opt { optVariables =
-                       setVariable "epub-cover-image" (T.pack arg) $
+                       setVariable "epub-cover-image"
+                         (T.pack $ normalizePath arg) $
                          optVariables opt })
                   "FILE")
                  "" -- "Path of epub cover image"
 
     , Option "" ["epub-metadata"]
                  (ReqArg
-                  (\arg opt -> return opt { optEpubMetadata = Just arg })
+                  (\arg opt -> return opt { optEpubMetadata = Just $
+                                             normalizePath arg })
                   "FILE")
                  "" -- "Path of epub metadata file"
 
     , Option "" ["epub-embed-font"]
                  (ReqArg
                   (\arg opt ->
-                     return opt{ optEpubFonts = arg : optEpubFonts opt })
+                     return opt{ optEpubFonts = normalizePath arg :
+                                                optEpubFonts opt })
                   "FILE")
                  "" -- "Directory of fonts to embed"
 
@@ -647,10 +673,17 @@ options =
                  "all|none|best")
                  "" -- "Starting number for sections, subsections, etc."
 
+    , Option "C" ["citeproc"]
+                 (NoArg
+                  (\opt -> return opt { optFilters =
+                      optFilters opt ++ [CiteprocFilter] }))
+                 "" -- "Process citations"
+
     , Option "" ["bibliography"]
                  (ReqArg
                   (\arg opt -> return opt{ optMetadata =
-                                            addMeta "bibliography" arg $
+                                            addMeta "bibliography"
+                                              (normalizePath arg) $
                                               optMetadata opt })
                    "FILE")
                  ""
@@ -659,7 +692,8 @@ options =
                  (ReqArg
                   (\arg opt ->
                      return opt{ optMetadata =
-                                   addMeta "csl" arg $ optMetadata opt })
+                                   addMeta "csl" (normalizePath arg) $
+                                   optMetadata opt })
                    "FILE")
                  ""
 
@@ -667,8 +701,8 @@ options =
                  (ReqArg
                   (\arg opt ->
                      return opt{ optMetadata =
-                                  addMeta "citation-abbreviations" arg $
-                                    optMetadata opt })
+                                  addMeta "citation-abbreviations"
+                                    (normalizePath arg) $ optMetadata opt })
                    "FILE")
                  ""
 
@@ -699,8 +733,7 @@ options =
     , Option "" ["mathjax"]
                  (OptArg
                   (\arg opt -> do
-                      let url' = maybe (defaultMathJaxURL <>
-                                  "tex-mml-chtml.js") T.pack arg
+                      let url' = maybe defaultMathJaxURL T.pack arg
                       return opt { optHTMLMathMethod = MathJax url'})
                   "URL")
                  "" -- "Use MathJax for HTML math"
@@ -752,7 +785,8 @@ options =
 
     , Option "" ["log"]
                  (ReqArg
-                  (\arg opt -> return opt{ optLogFile = Just arg })
+                  (\arg opt -> return opt{ optLogFile = Just $
+                                            normalizePath arg })
                 "FILE")
                 "" -- "Log messages in JSON format to this file."
 
@@ -823,7 +857,7 @@ options =
                                  , sShortname s `notElem`
                                     [T.pack "Alert", T.pack "Alert_indent"]
                                  ]
-                     mapM_ (UTF8.hPutStrLn stdout) langs
+                     mapM_ (UTF8.hPutStrLn stdout) (sort langs)
                      exitSuccess ))
                  ""
 
@@ -869,9 +903,7 @@ options =
     , Option "" ["print-highlight-style"]
                  (ReqArg
                   (\arg opt -> do
-                     let write = case optOutputFile opt of
-                                        Just f  -> B.writeFile f
-                                        Nothing -> B.putStr
+                     let write = maybe B.putStr B.writeFile $ optOutputFile opt
                      sty <- runIOorExplode $ lookupHighlightStyle arg
                      write $ encodePretty'
                        defConfig{confIndent = Spaces 4
@@ -898,7 +930,8 @@ options =
                      prg <- getProgName
                      defaultDatadirs <- defaultUserDataDirs
                      UTF8.hPutStrLn stdout (prg ++ " " ++ T.unpack pandocVersion ++
-                       compileInfo ++ "\nDefault user data directory: " ++
+                       compileInfo ++
+                       "\nUser data directory: " ++
                        intercalate " or " defaultDatadirs ++
                        ('\n':copyrightMessage))
                      exitSuccess ))
@@ -929,16 +962,16 @@ usageMessage programName = usageInfo (programName ++ " [OPTIONS] [FILES]")
 
 copyrightMessage :: String
 copyrightMessage = intercalate "\n" [
-  "Copyright (C) 2006-2020 John MacFarlane",
-  "Web:  https://pandoc.org",
-  "This is free software; see the source for copying conditions.",
-  "There is no warranty, not even for merchantability or fitness",
-  "for a particular purpose." ]
+ "Copyright (C) 2006-2020 John MacFarlane. Web:  https://pandoc.org",
+ "This is free software; see the source for copying conditions. There is no",
+ "warranty, not even for merchantability or fitness for a particular purpose." ]
 
 compileInfo :: String
 compileInfo =
-  "\nCompiled with pandoc-types " ++ VERSION_pandoc_types ++ ", texmath " ++
-  VERSION_texmath ++ ", skylighting " ++ VERSION_skylighting
+  "\nCompiled with pandoc-types " ++ VERSION_pandoc_types ++
+  ", texmath " ++ VERSION_texmath ++ ", skylighting " ++
+  VERSION_skylighting ++ ",\nciteproc " ++ VERSION_citeproc ++
+  ", ipynb " ++ VERSION_ipynb
 
 handleUnrecognizedOption :: String -> [String] -> [String]
 handleUnrecognizedOption "--smart" =
@@ -1018,7 +1051,7 @@ lookupHighlightStyle s
 deprecatedOption :: String -> String -> IO ()
 deprecatedOption o msg =
   runIO (report $ Deprecated (T.pack o) (T.pack msg)) >>=
-    \r -> case r of
+    \case
        Right () -> return ()
        Left e   -> E.throwIO e
 

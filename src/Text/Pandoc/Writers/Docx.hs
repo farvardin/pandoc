@@ -3,6 +3,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns        #-}
 {-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {- |
    Module      : Text.Pandoc.Writers.Docx
@@ -210,8 +211,11 @@ writeDocx :: (PandocMonad m)
           => WriterOptions  -- ^ Writer options
           -> Pandoc         -- ^ Document to convert
           -> m BL.ByteString
-writeDocx opts doc@(Pandoc meta _) = do
-  let doc' = walk fixDisplayMath doc
+writeDocx opts doc = do
+  let Pandoc meta blocks = walk fixDisplayMath doc
+  let blocks' = makeSections True Nothing blocks
+  let doc' = Pandoc meta blocks'
+
   username <- P.lookupEnv "USERNAME"
   utctime <- P.getCurrentTime
   oldUserDataDir <- P.getUserDataDir
@@ -437,7 +441,7 @@ writeDocx opts doc@(Pandoc meta _) = do
         Nothing      -> mknode "w:sectPr" [] ()
 
   -- let sectpr = fromMaybe (mknode "w:sectPr" [] ()) mbsectpr'
-  let contents' = contents ++ [sectpr]
+  let contents' = contents ++ [Elem sectpr]
   let docContents = mknode "w:document" stdAttributes
                     $ mknode "w:body" [] contents'
 
@@ -534,7 +538,8 @@ writeDocx opts doc@(Pandoc meta _) = do
 
   -- docProps/custom.xml
   let customProperties :: [(String, String)]
-      customProperties = [(T.unpack k, T.unpack $ lookupMetaString k meta) | k <- M.keys (unMeta meta)
+      customProperties = [ (T.unpack k, T.unpack $ lookupMetaString k meta)
+                         | k <- M.keys (unMeta meta)
                          , k `notElem` (["title", "author", "keywords"]
                                        ++ extraCoreProps)]
   let mkCustomProp (k, v) pid = mknode "property"
@@ -728,9 +733,9 @@ mkLvl marker lvl =
     , mknode "w:lvlText" [("w:val",lvltxt)] ()
     , mknode "w:lvlJc" [("w:val","left")] ()
     , mknode "w:pPr" []
-      [ mknode "w:tabs" []
-        $ mknode "w:tab" [("w:val","num"),("w:pos",show $ lvl * step)] ()
-      , mknode "w:ind" [("w:left",show $ lvl * step + hang),("w:hanging",show hang)] ()
+      [ mknode "w:ind" [ ("w:left",show $ lvl * step + step)
+                       , ("w:hanging",show (hang :: Int))
+                       ] ()
       ]
     ]
     where (fmt, lvltxt, start) =
@@ -784,7 +789,7 @@ makeTOC opts = do
           mknode "w:docPartUnique" [] ()]
          -- w:docPartObj
       ), -- w:sdtPr
-      mknode "w:sdtContent" [] (title++[
+      mknode "w:sdtContent" [] (title ++ [ Elem $
         mknode "w:p" [] (
           mknode "w:r" [] [
             mknode "w:fldChar" [("w:fldCharType","begin"),("w:dirty","true")] (),
@@ -798,7 +803,9 @@ makeTOC opts = do
 
 -- | Convert Pandoc document to two lists of
 -- OpenXML elements (the main document and footnotes).
-writeOpenXML :: (PandocMonad m) => WriterOptions -> Pandoc -> WS m ([Element], [Element],[Element])
+writeOpenXML :: (PandocMonad m)
+             => WriterOptions -> Pandoc
+             -> WS m ([Content], [Element], [Element])
 writeOpenXML opts (Pandoc meta blocks) = do
   let tit = docTitle meta
   let auths = docAuthors meta
@@ -826,6 +833,7 @@ writeOpenXML opts (Pandoc meta blocks) = do
         return $
           mknode "w:comment" [('w':':':T.unpack k,T.unpack v) | (k,v) <- kvs]
             [ mknode "w:p" [] $
+              map Elem
               [ mknode "w:pPr" []
                 [ mknode "w:pStyle" [("w:val", "CommentText")] () ]
               , mknode "w:r" []
@@ -840,12 +848,20 @@ writeOpenXML opts (Pandoc meta blocks) = do
   toc <- if includeTOC
             then makeTOC opts
             else return []
-  let meta' = title ++ subtitle ++ authors ++ date ++ abstract ++ toc
+  let meta' = title ++ subtitle ++ authors ++ date ++ abstract ++ map Elem toc
   return (meta' ++ doc', notes', comments')
 
 -- | Convert a list of Pandoc blocks to OpenXML.
-blocksToOpenXML :: (PandocMonad m) => WriterOptions -> [Block] -> WS m [Element]
-blocksToOpenXML opts bls = concat `fmap` mapM (blockToOpenXML opts) bls
+blocksToOpenXML :: (PandocMonad m) => WriterOptions -> [Block] -> WS m [Content]
+blocksToOpenXML opts = fmap concat . mapM (blockToOpenXML opts) . separateTables
+
+-- Word combines adjacent tables unless you put an empty paragraph between
+-- them.  See #4315.
+separateTables :: [Block] -> [Block]
+separateTables [] = []
+separateTables (x@Table{}:xs@(Table{}:_)) =
+  x : RawBlock (Format "openxml") "<w:p />" : separateTables xs
+separateTables (x:xs) = x : separateTables xs
 
 pStyleM :: (PandocMonad m) => ParaStyleName -> WS m XML.Element
 pStyleM styleName = do
@@ -872,10 +888,10 @@ dynamicStyleKey :: T.Text
 dynamicStyleKey = "custom-style"
 
 -- | Convert a Pandoc block element to OpenXML.
-blockToOpenXML :: (PandocMonad m) => WriterOptions -> Block -> WS m [Element]
+blockToOpenXML :: (PandocMonad m) => WriterOptions -> Block -> WS m [Content]
 blockToOpenXML opts blk = withDirection $ blockToOpenXML' opts blk
 
-blockToOpenXML' :: (PandocMonad m) => WriterOptions -> Block -> WS m [Element]
+blockToOpenXML' :: (PandocMonad m) => WriterOptions -> Block -> WS m [Content]
 blockToOpenXML' _ Null = return []
 blockToOpenXML' opts (Div (ident,_classes,kvs) bs) = do
   stylemod <- case lookup dynamicStyleKey kvs of
@@ -898,19 +914,29 @@ blockToOpenXML' opts (Div (ident,_classes,kvs) bs) = do
   header <- dirmod $ stylemod $ blocksToOpenXML opts hs
   contents <- dirmod $ bibmod $ stylemod $ blocksToOpenXML opts bs'
   wrapBookmark ident $ header <> contents
-blockToOpenXML' opts (Header lev (ident,_,_) lst) = do
+blockToOpenXML' opts (Header lev (ident,_,kvs) lst) = do
   setFirstPara
   paraProps <- withParaPropM (pStyleM (fromString $ "Heading "++show lev)) $
                     getParaProps False
-  contents <- inlinesToOpenXML opts lst
+  number <-
+        if writerNumberSections opts
+           then
+             case lookup "number" kvs of
+                Just n -> do
+                   num <- withTextPropM (rStyleM "SectionNumber")
+                            (inlineToOpenXML opts (Str n))
+                   return $ num ++ [Elem $ mknode "w:r" [] [mknode "w:tab" [] ()]]
+                Nothing -> return []
+           else return []
+  contents <- (number ++) <$> inlinesToOpenXML opts lst
   if T.null ident
-     then return [mknode "w:p" [] (paraProps ++ contents)]
+     then return [Elem $ mknode "w:p" [] (map Elem paraProps ++ contents)]
      else do
        let bookmarkName = ident
        modify $ \s -> s{ stSectionIds = Set.insert bookmarkName
                                       $ stSectionIds s }
        bookmarkedContents <- wrapBookmark bookmarkName contents
-       return [mknode "w:p" [] (paraProps ++ bookmarkedContents)]
+       return [Elem $ mknode "w:p" [] (map Elem paraProps ++ bookmarkedContents)]
 blockToOpenXML' opts (Plain lst) = do
   isInTable <- gets stInTable
   isInList <- gets stInList
@@ -930,7 +956,9 @@ blockToOpenXML' opts (Para [Image attr alt (src,T.stripPrefix "fig:" -> Just tit
   contents <- inlinesToOpenXML opts [Image attr alt (src,tit)]
   captionNode <- withParaPropM (pStyleM "Image Caption")
                  $ blockToOpenXML opts (Para alt)
-  return $ mknode "w:p" [] (paraProps ++ contents) : captionNode
+  return $
+    Elem (mknode "w:p" [] (map Elem paraProps ++ contents))
+    : captionNode
 blockToOpenXML' opts (Para lst)
   | null lst && not (isEnabled Ext_empty_paragraphs opts) = return []
   | otherwise = do
@@ -947,10 +975,12 @@ blockToOpenXML' opts (Para lst)
             ps               -> ps
       modify $ \s -> s { stFirstPara = False }
       contents <- inlinesToOpenXML opts lst
-      return [mknode "w:p" [] (paraProps' ++ contents)]
+      return [Elem $ mknode "w:p" [] (map Elem paraProps' ++ contents)]
 blockToOpenXML' opts (LineBlock lns) = blockToOpenXML opts $ linesToPara lns
 blockToOpenXML' _ b@(RawBlock format str)
-  | format == Format "openxml" = return [ x | Elem x <- parseXML str ]
+  | format == Format "openxml" = return [
+        Text (CData CDataRaw (T.unpack str) Nothing)
+      ]
   | otherwise                  = do
       report $ BlockNotRendered b
       return []
@@ -965,7 +995,7 @@ blockToOpenXML' opts (CodeBlock attrs@(ident, _, _) str) = do
   wrapBookmark ident p
 blockToOpenXML' _ HorizontalRule = do
   setFirstPara
-  return [
+  return [ Elem $
     mknode "w:p" [] $ mknode "w:r" [] $ mknode "w:pict" []
     $ mknode "v:rect" [("style","width:0;height:1.5pt"),
                        ("o:hralign","center"),
@@ -981,39 +1011,46 @@ blockToOpenXML' opts (Table _ blkCapt specs thead tbody tfoot) = do
                       $ blockToOpenXML opts (Para caption)
   let alignmentFor al = mknode "w:jc" [("w:val",alignmentToString al)] ()
   -- Table cells require a <w:p> element, even an empty one!
-  -- Not in the spec but in Word 2007, 2010. See #4953.
+  -- Not in the spec but in Word 2007, 2010. See #4953. And
+  -- apparently the last element must be a <w:p>, see #6983.
   let cellToOpenXML (al, cell) = do
         es <- withParaProp (alignmentFor al) $ blocksToOpenXML opts cell
-        return $ if any (\e -> qName (elName e) == "p") es
-           then es
-           else es ++ [mknode "w:p" [] ()]
+        return $
+          case reverse (onlyElems es) of
+            b:e:_ | qName (elName b) == "bookmarkEnd"
+                  , qName (elName e) == "p" -> es
+            e:_   | qName (elName e) == "p" -> es
+            _ -> es ++ [Elem $ mknode "w:p" [] ()]
   headers' <- mapM cellToOpenXML $ zip aligns headers
   rows' <- mapM (mapM cellToOpenXML . zip aligns) rows
-  let borderProps = mknode "w:tcPr" []
+  let borderProps = Elem $ mknode "w:tcPr" []
                     [ mknode "w:tcBorders" []
                       $ mknode "w:bottom" [("w:val","single")] ()
                     , mknode "w:vAlign" [("w:val","bottom")] () ]
   compactStyle <- pStyleM "Compact"
-  let emptyCell' = [mknode "w:p" [] [mknode "w:pPr" [] [compactStyle]]]
+  let emptyCell' = [Elem $ mknode "w:p" [] [mknode "w:pPr" [] [compactStyle]]]
   let mkcell border contents = mknode "w:tc" []
                             $ [ borderProps | border ] ++
                             if null contents
                                then emptyCell'
                                else contents
-  let mkrow border cells = mknode "w:tr" [] $
-                        [mknode "w:trPr" [] [
-                          mknode "w:cnfStyle" [("w:firstRow","1")] ()] | border]
-                        ++ map (mkcell border) cells
+  let mkrow border cells =
+         mknode "w:tr" [] $
+         [ mknode "w:trPr" []
+           [ mknode "w:cnfStyle" [("w:firstRow","1")] ()]
+         | border]
+         ++ map (mkcell border) cells
   let textwidth = 7920  -- 5.5 in in twips, 1/20 pt
   let fullrow = 5000 -- 100% specified in pct
   let rowwidth = fullrow * sum widths
   let mkgridcol w = mknode "w:gridCol"
                        [("w:w", show (floor (textwidth * w) :: Integer))] ()
-  let hasHeader = any (not . null) headers
+  let hasHeader = not $ all null headers
   modify $ \s -> s { stInTable = False }
   return $
     caption' ++
-    [mknode "w:tbl" []
+    [Elem $
+     mknode "w:tbl" []
       ( mknode "w:tblPr" []
         (   mknode "w:tblStyle" [("w:val","Table")] () :
             mknode "w:tblW" [("w:type", "pct"), ("w:w", show rowwidth)] () :
@@ -1048,7 +1085,9 @@ blockToOpenXML' opts (DefinitionList items) = do
   setFirstPara
   return l
 
-definitionListItemToOpenXML  :: (PandocMonad m) => WriterOptions -> ([Inline],[[Block]]) -> WS m [Element]
+definitionListItemToOpenXML  :: (PandocMonad m)
+                             => WriterOptions -> ([Inline],[[Block]])
+                             -> WS m [Content]
 definitionListItemToOpenXML opts (term,defs) = do
   term' <- withParaPropM (pStyleM "Definition Term")
            $ blockToOpenXML opts (Para term)
@@ -1061,16 +1100,28 @@ addList marker = do
   lists <- gets stLists
   modify $ \st -> st{ stLists = lists ++ [marker] }
 
-listItemToOpenXML :: (PandocMonad m) => WriterOptions -> Int -> [Block] -> WS m [Element]
-listItemToOpenXML _ _ []                   = return []
+listItemToOpenXML :: (PandocMonad m)
+                  => WriterOptions
+                  -> Int -> [Block]
+                  -> WS m [Content]
+listItemToOpenXML _ _ []                  = return []
 listItemToOpenXML opts numid (first:rest) = do
   oldInList <- gets stInList
   modify $ \st -> st{ stInList = True }
-  first' <- withNumId numid $ blockToOpenXML opts first
+  let isListBlock = \case
+        BulletList{}  -> True
+        OrderedList{} -> True
+        _             -> False
+  -- Prepend an empty string if the first entry is another
+  -- list. Otherwise the outer bullet will disappear.
+  let (first', rest') = if isListBlock first
+                           then (Plain [Str ""] , first:rest)
+                           else (first, rest)
+  first'' <- withNumId numid $ blockToOpenXML opts first'
   -- baseListId is the code for no list marker:
-  rest'  <- withNumId baseListId $ blocksToOpenXML opts rest
+  rest''  <- withNumId baseListId $ blocksToOpenXML opts rest'
   modify $ \st -> st{ stInList = oldInList }
-  return $ first' ++ rest'
+  return $ first'' ++ rest''
 
 alignmentToString :: Alignment -> [Char]
 alignmentToString alignment = case alignment of
@@ -1080,7 +1131,7 @@ alignmentToString alignment = case alignment of
                                  AlignDefault -> "left"
 
 -- | Convert a list of inline elements to OpenXML.
-inlinesToOpenXML :: (PandocMonad m) => WriterOptions -> [Inline] -> WS m [Element]
+inlinesToOpenXML :: PandocMonad m => WriterOptions -> [Inline] -> WS m [Content]
 inlinesToOpenXML opts lst = concat `fmap` mapM (inlineToOpenXML opts) lst
 
 withNumId :: (PandocMonad m) => Int -> WS m a -> WS m a
@@ -1155,32 +1206,45 @@ setFirstPara :: PandocMonad m => WS m ()
 setFirstPara =  modify $ \s -> s { stFirstPara = True }
 
 -- | Convert an inline element to OpenXML.
-inlineToOpenXML :: PandocMonad m => WriterOptions -> Inline -> WS m [Element]
+inlineToOpenXML :: PandocMonad m => WriterOptions -> Inline -> WS m [Content]
 inlineToOpenXML opts il = withDirection $ inlineToOpenXML' opts il
 
-inlineToOpenXML' :: PandocMonad m => WriterOptions -> Inline -> WS m [Element]
+inlineToOpenXML' :: PandocMonad m => WriterOptions -> Inline -> WS m [Content]
 inlineToOpenXML' _ (Str str) =
-  formattedString str
+  map Elem <$> formattedString str
 inlineToOpenXML' opts Space = inlineToOpenXML opts (Str " ")
 inlineToOpenXML' opts SoftBreak = inlineToOpenXML opts (Str " ")
+inlineToOpenXML' opts (Span ("",["csl-block"],[]) ils) =
+  inlinesToOpenXML opts ils
+inlineToOpenXML' opts (Span ("",["csl-left-margin"],[]) ils) =
+  inlinesToOpenXML opts ils
+inlineToOpenXML' opts (Span ("",["csl-right-inline"],[]) ils) =
+   ([Elem $
+     mknode "w:r" []
+     (mknode "w:t"
+       [("xml:space","preserve")]
+       ("\t" :: String))] ++)
+    <$> inlinesToOpenXML opts ils
+inlineToOpenXML' opts (Span ("",["csl-indent"],[]) ils) =
+  inlinesToOpenXML opts ils
 inlineToOpenXML' _ (Span (ident,["comment-start"],kvs) ils) = do
   -- prefer the "id" in kvs, since that is the one produced by the docx
   -- reader.
   let ident' = fromMaybe ident (lookup "id" kvs)
       kvs' = filter (("id" /=) . fst) kvs
   modify $ \st -> st{ stComments = (("id",ident'):kvs', ils) : stComments st }
-  return [ mknode "w:commentRangeStart" [("w:id", T.unpack ident')] () ]
+  return [ Elem $ mknode "w:commentRangeStart" [("w:id", T.unpack ident')] () ]
 inlineToOpenXML' _ (Span (ident,["comment-end"],kvs) _) =
   -- prefer the "id" in kvs, since that is the one produced by the docx
   -- reader.
   let ident' = fromMaybe ident (lookup "id" kvs)
-  in
-    return [ mknode "w:commentRangeEnd" [("w:id", T.unpack ident')] ()
-           , mknode "w:r" []
-             [ mknode "w:rPr" []
-               [ mknode "w:rStyle" [("w:val", "CommentReference")] () ]
-             , mknode "w:commentReference" [("w:id", T.unpack ident')] () ]
-           ]
+  in return . map Elem $
+     [ mknode "w:commentRangeEnd" [("w:id", T.unpack ident')] ()
+     , mknode "w:r" []
+       [ mknode "w:rPr" []
+         [ mknode "w:rStyle" [("w:val", "CommentReference")] () ]
+       , mknode "w:commentReference" [("w:id", T.unpack ident')] () ]
+     ]
 inlineToOpenXML' opts (Span (ident,classes,kvs) ils) = do
   stylemod <- case lookup dynamicStyleKey kvs of
                    Just (fromString . T.unpack -> sty) -> do
@@ -1201,41 +1265,42 @@ inlineToOpenXML' opts (Span (ident,classes,kvs) ils) = do
                   else id)
       getChangeAuthorDate = do
         defaultAuthor <- asks envChangesAuthor
-        defaultDate <- asks envChangesDate
         let author = fromMaybe defaultAuthor (lookup "author" kvs)
-            date   = fromMaybe defaultDate (lookup "date" kvs)
-        return (author, date)
+        let mdate = lookup "date" kvs
+        return $ ("w:author", T.unpack author) :
+                   maybe [] (\date -> [("w:date", T.unpack date)]) mdate
   insmod <- if "insertion" `elem` classes
                then do
-                 (author, date) <- getChangeAuthorDate
+                 changeAuthorDate <- getChangeAuthorDate
                  insId <- gets stInsId
                  modify $ \s -> s{stInsId = insId + 1}
                  return $ \f -> do
                    x <- f
-                   return [ mknode "w:ins"
-                              [("w:id", show insId),
-                              ("w:author", T.unpack author),
-                              ("w:date", T.unpack date)] x ]
+                   return [Elem $
+                           mknode "w:ins"
+                             (("w:id", show insId) : changeAuthorDate) x]
                else return id
   delmod <- if "deletion" `elem` classes
                then do
-                 (author, date) <- getChangeAuthorDate
+                 changeAuthorDate <- getChangeAuthorDate
                  delId <- gets stDelId
                  modify $ \s -> s{stDelId = delId + 1}
                  return $ \f -> local (\env->env{envInDel=True}) $ do
                    x <- f
-                   return [mknode "w:del"
-                           [("w:id", show delId),
-                           ("w:author", T.unpack author),
-                           ("w:date", T.unpack date)] x]
+                   return [Elem $ mknode "w:del"
+                             (("w:id", show delId) : changeAuthorDate) x]
                else return id
   contents <- insmod $ delmod $ dirmod $ stylemod $ pmod
                      $ inlinesToOpenXML opts ils
   wrapBookmark ident contents
 inlineToOpenXML' opts (Strong lst) =
-  withTextProp (mknode "w:b" [] ()) $ inlinesToOpenXML opts lst
+  withTextProp (mknode "w:b" [] ()) $
+  withTextProp (mknode "w:bCs" [] ()) $ -- needed for LTR, #6911
+  inlinesToOpenXML opts lst
 inlineToOpenXML' opts (Emph lst) =
-  withTextProp (mknode "w:i" [] ()) $ inlinesToOpenXML opts lst
+  withTextProp (mknode "w:i" [] ()) $
+  withTextProp (mknode "w:iCs" [] ()) $  -- needed for LTR, #6911
+  inlinesToOpenXML opts lst
 inlineToOpenXML' opts (Underline lst) =
   withTextProp (mknode "w:u" [("w:val","single")] ()) $
     inlinesToOpenXML opts lst
@@ -1251,9 +1316,10 @@ inlineToOpenXML' opts (SmallCaps lst) =
 inlineToOpenXML' opts (Strikeout lst) =
   withTextProp (mknode "w:strike" [] ())
   $ inlinesToOpenXML opts lst
-inlineToOpenXML' _ LineBreak = return [br]
+inlineToOpenXML' _ LineBreak = return [Elem br]
 inlineToOpenXML' _ il@(RawInline f str)
-  | f == Format "openxml" = return [ x | Elem x <- parseXML str ]
+  | f == Format "openxml" = return
+                            [Text (CData CDataRaw (T.unpack str) Nothing)]
   | otherwise             = do
       report $ InlineNotRendered il
       return []
@@ -1266,13 +1332,13 @@ inlineToOpenXML' opts (Math mathType str) = do
   when (mathType == DisplayMath) setFirstPara
   res <- (lift . lift) (convertMath writeOMML mathType str)
   case res of
-       Right r -> return [r]
+       Right r -> return [Elem r]
        Left il -> inlineToOpenXML' opts il
 inlineToOpenXML' opts (Cite _ lst) = inlinesToOpenXML opts lst
 inlineToOpenXML' opts (Code attrs str) = do
   let alltoktypes = [KeywordTok ..]
   tokTypesMap <- mapM (\tt -> (,) tt <$> rStyleM (fromString $ show tt)) alltoktypes
-  let unhighlighted = intercalate [br] `fmap`
+  let unhighlighted = (map Elem . intercalate [br]) `fmap`
                        mapM formattedString (T.lines str)
       formatOpenXML _fmtOpts = intercalate [br] . map (map toHlTok)
       toHlTok (toktype,tok) =
@@ -1285,7 +1351,7 @@ inlineToOpenXML' opts (Code attrs str) = do
           then unhighlighted
           else case highlight (writerSyntaxMap opts)
                       formatOpenXML attrs str of
-                    Right h  -> return h
+                    Right h  -> return (map Elem h)
                     Left msg -> do
                       unless (T.null msg) $ report $ CouldNotHighlight msg
                       unhighlighted
@@ -1308,14 +1374,14 @@ inlineToOpenXML' opts (Note bs) = do
                 $ insertNoteRef bs)
   let newnote = mknode "w:footnote" [("w:id", notenum)] contents
   modify $ \s -> s{ stFootnotes = newnote : notes }
-  return [ mknode "w:r" []
+  return [ Elem $ mknode "w:r" []
            [ mknode "w:rPr" [] footnoteStyle
            , mknode "w:footnoteReference" [("w:id", notenum)] () ] ]
 -- internal link:
 inlineToOpenXML' opts (Link _ txt (T.uncons -> Just ('#', xs),_)) = do
   contents <- withTextPropM (rStyleM "Hyperlink") $ inlinesToOpenXML opts txt
   return
-    [ mknode "w:hyperlink" [("w:anchor", T.unpack $ toBookmarkName xs)] contents ]
+    [ Elem $ mknode "w:hyperlink" [("w:anchor", T.unpack $ toBookmarkName xs)] contents ]
 -- external link:
 inlineToOpenXML' opts (Link _ txt (src,_)) = do
   contents <- withTextPropM (rStyleM "Hyperlink") $ inlinesToOpenXML opts txt
@@ -1327,7 +1393,7 @@ inlineToOpenXML' opts (Link _ txt (src,_)) = do
               modify $ \st -> st{ stExternalLinks =
                         M.insert (T.unpack src) i extlinks }
               return i
-  return [ mknode "w:hyperlink" [("r:id",id')] contents ]
+  return [ Elem $ mknode "w:hyperlink" [("r:id",id')] contents ]
 inlineToOpenXML' opts (Image attr@(imgident, _, _) alt (src, title)) = do
   pageWidth <- asks envPrintWidth
   imgs <- gets stImages
@@ -1391,7 +1457,7 @@ inlineToOpenXML' opts (Image attr@(imgident, _, _) alt (src, title)) = do
         imgElt
 
   wrapBookmark imgident =<< case stImage of
-    Just imgData -> return [generateImgElt imgData]
+    Just imgData -> return [Elem $ generateImgElt imgData]
     Nothing -> ( do --try
       (img, mt) <- P.fetchItem src
       ident <- ("rId"++) `fmap` getUniqueId
@@ -1419,7 +1485,7 @@ inlineToOpenXML' opts (Image attr@(imgident, _, _) alt (src, title)) = do
          else do
            -- insert mime type to use in constructing [Content_Types].xml
            modify $ \st -> st { stImages = M.insert (T.unpack src) imgData $ stImages st }
-           return [generateImgElt imgData]
+           return [Elem $ generateImgElt imgData]
       )
       `catchError` ( \e -> do
         report $ CouldNotFetchResource src $ T.pack (show e)
@@ -1469,7 +1535,7 @@ withDirection x = do
                                     , envTextProperties = EnvProps textStyle textProps'
                                     }
 
-wrapBookmark :: (PandocMonad m) => T.Text -> [Element] -> WS m [Element]
+wrapBookmark :: (PandocMonad m) => T.Text -> [Content] -> WS m [Content]
 wrapBookmark "" contents = return contents
 wrapBookmark ident contents = do
   id' <- getUniqueId
@@ -1477,7 +1543,7 @@ wrapBookmark ident contents = do
                        [("w:id", id')
                        ,("w:name", T.unpack $ toBookmarkName ident)] ()
       bookmarkEnd = mknode "w:bookmarkEnd" [("w:id", id')] ()
-  return $ bookmarkStart : contents ++ [bookmarkEnd]
+  return $ Elem bookmarkStart : contents ++ [Elem bookmarkEnd]
 
 -- Word imposes a 40 character limit on bookmark names and requires
 -- that they begin with a letter.  So we just use a hash of the

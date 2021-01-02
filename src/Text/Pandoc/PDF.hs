@@ -1,4 +1,5 @@
 {-# LANGUAGE CPP                 #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {- |
@@ -59,7 +60,10 @@ import Text.Pandoc.Logging
 
 #ifdef _WINDOWS
 changePathSeparators :: FilePath -> FilePath
-changePathSeparators = intercalate "/" . splitDirectories
+changePathSeparators =
+  -- We filter out backslashes because an initial `C:\` gets
+  -- retained by `splitDirectories`, see #6173:
+  intercalate "/" . map (filter (/='\\')) . splitDirectories
 #endif
 
 makePDF :: String              -- ^ pdf creator (pdflatex, lualatex, xelatex,
@@ -201,8 +205,7 @@ convertImage opts tmpdir fname = do
       (\(e :: E.SomeException) -> return $ Left $
           "check that rsvg-convert is in path.\n" <>
           tshow e)
-    _ -> JP.readImage fname >>= \res ->
-          case res of
+    _ -> JP.readImage fname >>= \case
                Left e    -> return $ Left $ T.pack e
                Right img ->
                  E.catch (Right pngOut <$ JP.savePngImage pngOut img) $

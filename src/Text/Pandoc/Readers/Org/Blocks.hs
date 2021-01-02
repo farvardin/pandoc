@@ -34,6 +34,7 @@ import Text.Pandoc.Shared (compactify, compactifyDL, safeRead)
 import Control.Monad (foldM, guard, mplus, mzero, void)
 import Data.Char (isSpace)
 import Data.Default (Default)
+import Data.Functor (($>))
 import Data.List (foldl', intersperse)
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
@@ -103,32 +104,30 @@ attrFromBlockAttributes :: BlockAttributes -> Attr
 attrFromBlockAttributes BlockAttributes{..} =
   let
     ident   = fromMaybe mempty $ lookup "id" blockAttrKeyValues
-    classes = case lookup "class" blockAttrKeyValues of
-                Nothing     -> []
-                Just clsStr -> T.words clsStr
+    classes = maybe [] T.words $ lookup "class" blockAttrKeyValues
     kv      = filter ((`notElem` ["id", "class"]) . fst) blockAttrKeyValues
   in (ident, classes, kv)
 
 stringyMetaAttribute :: Monad m => OrgParser m (Text, Text)
 stringyMetaAttribute = try $ do
   metaLineStart
-  attrName <- T.toUpper <$> many1TillChar nonspaceChar (char ':')
+  attrName <- T.toLower <$> many1TillChar nonspaceChar (char ':')
   skipSpaces
   attrValue <- anyLine <|> ("" <$ newline)
   return (attrName, attrValue)
 
 -- | Parse a set of block attributes. Block attributes are given through
--- lines like @#+CAPTION: block caption@ or @#+ATTR_HTML: :width 20@.
+-- lines like @#+caption: block caption@ or @#+attr_html: :width 20@.
 -- Parsing will fail if any line contains an attribute different from
 -- those attributes known to work on blocks.
 blockAttributes :: PandocMonad m => OrgParser m BlockAttributes
 blockAttributes = try $ do
   kv <- many stringyMetaAttribute
   guard $ all (isBlockAttr . fst) kv
-  let caption = foldl' (appendValues "CAPTION") Nothing kv
-  let kvAttrs = foldl' (appendValues "ATTR_HTML") Nothing kv
-  let name    = lookup "NAME" kv
-  let label   = lookup "LABEL" kv
+  let caption = foldl' (appendValues "caption") Nothing kv
+  let kvAttrs = foldl' (appendValues "attr_html") Nothing kv
+  let name    = lookup "name" kv
+  let label   = lookup "label" kv
   caption' <- traverse (parseFromString inlines . (<> "\n")) caption
   kvAttrs' <- parseFromString keyValues . (<> "\n") $ fromMaybe mempty kvAttrs
   return BlockAttributes
@@ -140,9 +139,9 @@ blockAttributes = try $ do
  where
    isBlockAttr :: Text -> Bool
    isBlockAttr = flip elem
-                 [ "NAME", "LABEL", "CAPTION"
-                 , "ATTR_HTML", "ATTR_LATEX"
-                 , "RESULTS"
+                 [ "name", "label", "caption"
+                 , "attr_html", "attr_latex"
+                 , "results"
                  ]
 
    appendValues :: Text -> Maybe Text -> (Text, Text) -> Maybe Text
@@ -171,10 +170,10 @@ keyValues = try $
 
 
 --
--- Org Blocks (#+BEGIN_... / #+END_...)
+-- Org Blocks (#+begin_... / #+end_...)
 --
 
--- | Read an org-mode block delimited by #+BEGIN_TYPE and #+END_TYPE.
+-- | Read an org-mode block delimited by #+begin_type and #+end_type.
 orgBlock :: PandocMonad m => OrgParser m (F Blocks)
 orgBlock = try $ do
   blockAttrs <- blockAttributes
@@ -290,29 +289,27 @@ verseBlock blockType = try $ do
      return (trimInlinesF $ pure nbspIndent <> line)
 
 -- | Read a code block and the associated results block if present.  Which of
--- boths blocks is included in the output is determined using the "exports"
+-- the blocks is included in the output is determined using the "exports"
 -- argument in the block header.
 codeBlock :: PandocMonad m => BlockAttributes -> Text -> OrgParser m (F Blocks)
 codeBlock blockAttrs blockType = do
   skipSpaces
-  (classes, kv)     <- codeHeaderArgs <|> (mempty <$ ignHeaders)
-  content           <- rawBlockContent blockType
-  resultsContent    <- option mempty babelResultsBlock
-  let id'            = fromMaybe mempty $ blockAttrName blockAttrs
-  let codeBlck       = B.codeBlockWith ( id', classes, kv ) content
-  let labelledBlck   = maybe (pure codeBlck)
-                             (labelDiv codeBlck)
-                             (blockAttrCaption blockAttrs)
+  (classes, kv)  <- codeHeaderArgs <|> (mempty <$ ignHeaders)
+  content        <- rawBlockContent blockType
+  resultsContent <- option mempty babelResultsBlock
+  let identifier = fromMaybe mempty $ blockAttrName blockAttrs
+  let codeBlk    = B.codeBlockWith (identifier, classes, kv) content
+  let wrap       = maybe pure addCaption (blockAttrCaption blockAttrs)
   return $
-    (if exportsCode kv    then labelledBlck   else mempty) <>
+    (if exportsCode kv    then wrap codeBlk   else mempty) <>
     (if exportsResults kv then resultsContent else mempty)
  where
-   labelDiv :: Blocks -> F Inlines -> F Blocks
-   labelDiv blk value =
-     B.divWith nullAttr <$> (mappend <$> labelledBlock value <*> pure blk)
+   addCaption :: F Inlines -> Blocks -> F Blocks
+   addCaption caption blk = B.divWith ("", ["captioned-content"], [])
+                         <$> (mkCaptionBlock caption <> pure blk)
 
-   labelledBlock :: F Inlines -> F Blocks
-   labelledBlock = fmap (B.plain . B.spanWith ("", ["label"], []))
+   mkCaptionBlock :: F Inlines -> F Blocks
+   mkCaptionBlock = fmap (B.divWith ("", ["caption"], []) . B.plain)
 
    exportsResults :: [(Text, Text)] -> Bool
    exportsResults = maybe False (`elem` ["results", "both"]) . lookup "exports"
@@ -495,7 +492,7 @@ endOfParagraph = try $ skipSpaces *> newline *> endOfBlock
 
 -- | Example code marked up by a leading colon.
 example :: Monad m => OrgParser m (F Blocks)
-example = try $ returnF . exampleCode =<< T.unlines <$> many1 exampleLine
+example = try $ returnF . exampleCode . T.unlines =<< many1 exampleLine
  where
    exampleLine :: Monad m => OrgParser m Text
    exampleLine = try $ exampleLineStart *> anyLine
@@ -576,10 +573,10 @@ rawExportLine = try $ do
 rawOrgLine :: PandocMonad m => OrgParser m (F Blocks)
 rawOrgLine = do
   line <- metaLineStart *> anyLine
-  returnF $ B.rawBlock "org" $ ("#+" <> line)
+  returnF $ B.rawBlock "org" $ "#+" <> line
 
 commentLine :: Monad m => OrgParser m Blocks
-commentLine = commentLineStart *> anyLine *> pure mempty
+commentLine = commentLineStart *> anyLine $> mempty
 
 
 --
@@ -608,7 +605,10 @@ data OrgTable = OrgTable
   }
 
 table :: PandocMonad m => OrgParser m (F Blocks)
-table = gridTableWith blocks True <|> orgTable
+table = do
+  withTables <- getExportSetting exportWithTables
+  tbl <- gridTableWith blocks True <|> orgTable
+  return $ if withTables then tbl else mempty
 
 -- | A normal org table
 orgTable :: PandocMonad m => OrgParser m (F Blocks)
@@ -617,7 +617,7 @@ orgTable = try $ do
   -- tables start at first non-space character on the line
   let isFirstInListItem st = orgStateParserContext st == ListItemState &&
                              isNothing (orgStateLastPreCharPos st)
-  guard =<< not . isFirstInListItem <$> getState
+  guard . not . isFirstInListItem =<< getState
   blockAttrs <- blockAttributes
   lookAhead tableStart
   rows <- tableRows
@@ -645,12 +645,12 @@ orgToPandocTable (OrgTable colProps heads lns) caption =
              (TableFoot nullAttr [])
  where
    toRow = Row nullAttr . map B.simpleCell
-   toHeaderRow l = if null l then [] else [toRow l]
+   toHeaderRow l = [toRow l | not (null l)]
    convertColProp :: Maybe Int -> ColumnProperty -> (Alignment, ColWidth)
    convertColProp totalWidth colProp =
      let
        align' = fromMaybe AlignDefault $ columnAlignment colProp
-       width' = (\w t -> (fromIntegral w / fromIntegral t))
+       width' = (\w t -> fromIntegral w / fromIntegral t)
                 <$> columnRelWidth colProp
                 <*> totalWidth
      in (align', maybe ColWidthDefault ColWidth width')
@@ -688,9 +688,9 @@ columnPropertyCell = emptyOrgCell <|> propCell <?> "alignment info"
 
 tableAlignFromChar :: Monad m => OrgParser m Alignment
 tableAlignFromChar = try $
-  choice [ char 'l' *> return AlignLeft
-         , char 'c' *> return AlignCenter
-         , char 'r' *> return AlignRight
+  choice [ char 'l' $> AlignLeft
+         , char 'c' $> AlignCenter
+         , char 'r' $> AlignRight
          ]
 
 tableHline :: Monad m => OrgParser m OrgTableRow
@@ -793,13 +793,13 @@ paraOrPlain = try $ do
   -- Make sure we are not looking at a headline
   notFollowedBy' headerStart
   ils <- inlines
-  nl <- option False (newline *> return True)
+  nl <- option False (newline $> True)
   -- Read block as paragraph, except if we are in a list context and the block
   -- is directly followed by a list item, in which case the block is read as
   -- plain text.
   try (guard nl
        *> notFollowedBy (inList *> (orderedListStart <|> bulletListStart))
-       *> return (B.para <$> ils))
+       $> (B.para <$> ils))
     <|>  return (B.plain <$> ils)
 
 

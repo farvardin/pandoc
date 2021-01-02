@@ -23,8 +23,8 @@ module Text.Pandoc.App (
           , applyFilters
           ) where
 import qualified Control.Exception as E
-import Control.Monad
-import Control.Monad.Trans
+import Control.Monad ( (>=>), when )
+import Control.Monad.Trans ( MonadIO(..) )
 import Control.Monad.Except (throwError)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BL
@@ -40,7 +40,7 @@ import qualified Data.Text.Encoding.Error as TSE
 import Network.URI (URI (..), parseURI)
 import System.Directory (doesDirectoryExist)
 import System.Exit (exitSuccess)
-import System.FilePath
+import System.FilePath ( takeBaseName, takeExtension )
 import System.IO (nativeNewline, stdout)
 import qualified System.IO as IO (Newline (..))
 import Text.Pandoc
@@ -75,15 +75,6 @@ convertWithOpts opts = do
     do UTF8.hPutStrLn stdout outputFile
        mapM_ (UTF8.hPutStrLn stdout) (fromMaybe ["-"] $ optInputFiles opts)
        exitSuccess
-
-  let isPandocCiteproc (JSONFilter f) = takeBaseName f == "pandoc-citeproc"
-      isPandocCiteproc _              = False
-  -- --bibliography implies -F pandoc-citeproc for backwards compatibility:
-  let needsCiteproc = isJust (lookupMeta "bibliography"
-                                (optMetadata opts)) &&
-                      optCiteMethod opts `notElem` [Natbib, Biblatex] &&
-                      not (any isPandocCiteproc filters)
-  let filters' = filters ++ [ JSONFilter "pandoc-citeproc" | needsCiteproc ]
 
   let sources = case optInputFiles opts of
                      Just xs | not (optIgnoreArgs opts) -> xs
@@ -140,9 +131,10 @@ convertWithOpts opts = do
                                  (map (T.pack . takeExtension) sources) "markdown"
                              return "markdown"
 
+    let readerNameBase = T.takeWhile (\c -> c /= '+' && c /= '-') readerName
     let pdfOutput = map toLower (takeExtension outputFile) == ".pdf"
 
-    when (pdfOutput && readerName == "latex") $
+    when (pdfOutput && readerNameBase == "latex") $
       case optInputFiles opts of
         Just (inputFile:_) -> report $ UnusualConversion $ T.pack $
           "to convert a .tex file to PDF, you get better results by using pdflatex "
@@ -153,8 +145,8 @@ convertWithOpts opts = do
     (reader :: Reader PandocIO, readerExts) <- getReader readerName
 
     let convertTabs = tabFilter (if optPreserveTabs opts ||
-                                      readerName == "t2t" ||
-                                      readerName == "man"
+                                      readerNameBase == "t2t" ||
+                                      readerNameBase == "man"
                                     then 0
                                     else optTabStop opts)
 
@@ -168,9 +160,17 @@ convertWithOpts opts = do
     let format = outputFormat outputSettings
     let writer = outputWriter outputSettings
     let writerName = outputWriterName outputSettings
+    let writerNameBase = T.takeWhile (\c -> c /= '+' && c /= '-') writerName
     let writerOptions = outputWriterOptions outputSettings
 
-    let standalone = optStandalone opts || not (isTextFormat format) || pdfOutput
+    let bibOutput = writerNameBase == "bibtex" ||
+                    writerNameBase == "biblatex" ||
+                    writerNameBase == "csljson"
+
+    let standalone = optStandalone opts ||
+                     not (isTextFormat format) ||
+                     pdfOutput ||
+                     bibOutput
 
     -- We don't want to send output to the terminal if the user
     -- does 'pandoc -t docx input.txt'; though we allow them to
@@ -223,8 +223,9 @@ convertWithOpts opts = do
     metadataFromFile <-
       case optMetadataFiles opts of
         []    -> return mempty
-        paths -> mapM readFileLazy paths >>=
-                    fmap mconcat . mapM (yamlToMeta readerOpts)
+        paths -> mconcat <$>
+           mapM (\path -> do raw <- readFileLazy path
+                             yamlToMeta readerOpts (Just path) raw) paths
 
     let transforms = (case optShiftHeadingLevelBy opts of
                           0             -> id
@@ -240,6 +241,7 @@ convertWithOpts opts = do
                          then (eastAsianLineBreakFilter :)
                          else id) .
                      (case optIpynbOutput opts of
+                       _ | readerNameBase /= "ipynb" -> id
                        IpynbOutputAll  -> id
                        IpynbOutputNone -> (filterIpynbOutput Nothing :)
                        IpynbOutputBest -> (filterIpynbOutput (Just $
@@ -256,7 +258,7 @@ convertWithOpts opts = do
         sourceToDoc sources' =
            case reader of
                 TextReader r
-                  | optFileScope opts || readerName == "json" ->
+                  | optFileScope opts || readerNameBase == "json" ->
                       mconcat <$> mapM (readSource >=> r readerOpts) sources'
                   | otherwise ->
                       readSources sources' >>= r readerOpts
@@ -264,13 +266,20 @@ convertWithOpts opts = do
                   mconcat <$> mapM (readFile' >=> r readerOpts) sources'
 
 
-    when (readerName == "markdown_github" ||
-          writerName == "markdown_github") $
+    when (readerNameBase == "markdown_github" ||
+          writerNameBase == "markdown_github") $
       report $ Deprecated "markdown_github" "Use gfm instead."
 
     mapM_ (uncurry setRequestHeader) (optRequestHeaders opts)
 
     setNoCheckCertificate (optNoCheckCertificate opts)
+
+    let isPandocCiteproc (JSONFilter f) = takeBaseName f == "pandoc-citeproc"
+        isPandocCiteproc _              = False
+
+    when (any isPandocCiteproc filters) $
+      report $ Deprecated "pandoc-citeproc filter"
+               "Use --citeproc instead."
 
     doc <- sourceToDoc sources >>=
               (   (if isJust (optExtractMedia opts)
@@ -279,7 +288,7 @@ convertWithOpts opts = do
               >=> return . adjustMetadata (metadataFromFile <>)
               >=> return . adjustMetadata (<> metadata)
               >=> applyTransforms transforms
-              >=> applyFilters readerOpts filters' [T.unpack format]
+              >=> applyFilters readerOpts filters [T.unpack format]
               >=> maybe return extractMedia (optExtractMedia opts)
               )
 

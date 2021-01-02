@@ -24,6 +24,7 @@ module Text.Pandoc.Writers
     , writeCommonMark
     , writeConTeXt
     , writeCustom
+    , writeCslJson
     , writeDZSlides
     , writeDocbook4
     , writeDocbook5
@@ -87,6 +88,7 @@ import Text.Pandoc.Error
 import Text.Pandoc.Writers.AsciiDoc
 import Text.Pandoc.Writers.CommonMark
 import Text.Pandoc.Writers.ConTeXt
+import Text.Pandoc.Writers.CslJson
 import Text.Pandoc.Writers.Custom
 import Text.Pandoc.Writers.Docbook
 import Text.Pandoc.Writers.Docx
@@ -181,9 +183,11 @@ writers = [
   ,("asciidoctor"  , TextWriter writeAsciiDoctor)
   ,("haddock"      , TextWriter writeHaddock)
   ,("commonmark"   , TextWriter writeCommonMark)
+  ,("commonmark_x" , TextWriter writeCommonMark)
   ,("gfm"          , TextWriter writeCommonMark)
   ,("tei"          , TextWriter writeTEI)
   ,("muse"         , TextWriter writeMuse)
+  ,("csljson"      , TextWriter writeCslJson)
   ]
 
 -- | Retrieve writer, extensions based on formatSpec (format+extensions).

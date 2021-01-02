@@ -5,6 +5,7 @@ BRANCH?=master
 RESOLVER?=lts-13
 GHCOPTS=-fdiagnostics-color=always
 WEBSITE=../../web/pandoc.org
+REVISION?=1
 
 quick:
 	stack install --ghc-options='$(GHCOPTS)' --install-ghc --flag 'pandoc:embed_data_files' --fast --test --ghc-options='-j +RTS -A64m -RTS' --test-arguments='-j4 --hide-successes $(TESTARGS)'
@@ -64,48 +65,21 @@ dist: man/pandoc.1
 	cd pandoc-${version}
 	stack setup && stack test && cd .. && rm -rf "pandoc-${version}"
 
-packages: checkdocs winpkg debpkg macospkg
+check: checkdocs check-cabal
 
-checkdocs: README.md
-	! grep -n -e "\t" MANUAL.txt changelog
+checkdocs:
+	! grep -q -n -e "\t" MANUAL.txt changelog.md
 
 debpkg: man/pandoc.1
-	make -C linux && \
-	cp linux/artifacts/pandoc-$(version)-*.* .
-
-macospkg: man/pandoc.1
-	./macos/make_macos_package.sh
-
-winpkg: pandoc-$(version)-windows-i386.msi pandoc-$(version)-windows-i386.zip pandoc-$(version)-windows-x86_64.msi pandoc-$(version)-windows-x86_64.zip
-
-pandoc-$(version)-windows-%.zip: pandoc-$(version)-windows-%.msi
-	ORIGDIR=`pwd` && \
-	CONTAINER=$(basename $<) && \
-	TEMPDIR=`mktemp -d` && \
-	msiextract -C $$TEMPDIR/msi $< && \
-	pushd $$TEMPDIR && \
-	mkdir $$CONTAINER && \
-	find msi -type f -exec cp {} $$CONTAINER/ \; && \
-	zip -r $$ORIGDIR/$@ $$CONTAINER && \
-	popd & \
-	rm -rf $$TEMPDIR
-
-pandoc-$(version)-windows-%.msi: pandoc-windows-%.msi
-	osslsigncode sign -pkcs12 ~/Private/SectigoCodeSigning.exp2023.p12 -in $< -i http://johnmacfarlane.net/ -t http://timestamp.comodoca.com/ -out $@ -askpass
-	rm $<
-
-.INTERMEDIATE: pandoc-windows-i386.msi pandoc-windows-x86_64.msi
-
-pandoc-windows-i386.msi:
-	JOBID=$(shell curl https://ci.appveyor.com/api/projects/jgm/pandoc | jq '.build.jobs[]| select(.name|test("i386")) | .jobId') && \
-	wget "https://ci.appveyor.com/api/buildjobs/$$JOBID/artifacts/windows%2F$@" -O $@
-
-pandoc-windows-x86_64.msi:
-	JOBID=$(shell curl https://ci.appveyor.com/api/projects/jgm/pandoc | jq '.build.jobs[]| select(.name|test("x86_64")) | .jobId') && \
-	wget "https://ci.appveyor.com/api/buildjobs/$$JOBID/artifacts/windows%2F$@" -O $@
+	docker run -v `pwd`:/mnt \
+                   -v `pwd`/linux/artifacts:/artifacts \
+		   -e REVISION=$(REVISION) \
+		   -w /mnt \
+	           utdemir/ghc-musl:v12-libgmp-ghc8101 bash \
+		   /mnt/linux/make_artifacts.sh
 
 man/pandoc.1: MANUAL.txt man/pandoc.1.before man/pandoc.1.after
-	pandoc $< -f markdown-smart -t man -s \
+	pandoc $< -f markdown -t man -s \
 		--lua-filter man/manfilter.lua \
 		--include-before-body man/pandoc.1.before \
 		--include-after-body man/pandoc.1.after \
@@ -114,7 +88,7 @@ man/pandoc.1: MANUAL.txt man/pandoc.1.before man/pandoc.1.after
 		-o $@
 
 README.md: README.template MANUAL.txt tools/update-readme.lua
-	pandoc --lua-filter tools/update-readme.lua --reference-links \
+	pandoc --lua-filter tools/update-readme.lua \
 	      --reference-location=section -t gfm $< -o $@
 
 download_stats:
@@ -123,9 +97,9 @@ download_stats:
 
 pandoc-templates:
 	rm ../pandoc-templates/default.* ; \
-	cp data/templates/default.* data/templates/README.markdown data/templates/styles.* ../pandoc-templates/ ; \
+	cp data/templates/* ../pandoc-templates/ ; \
 	pushd ../pandoc-templates/ && \
-	git add default.* README.markdown styles.* && \
+	git add * && \
 	git commit -m "Updated templates for pandoc $(version)" && \
 	popd
 
@@ -140,4 +114,14 @@ update-website:
 clean:
 	stack clean
 
-.PHONY: deps quick full haddock install clean test bench changes_github macospkg dist prof download_stats reformat lint weigh doc/lua-filters.md packages pandoc-templates trypandoc update-website debpkg macospkg winpkg checkdocs ghcid ghci fix_spacing hlint
+check-cabal: git-files.txt sdist-files.txt
+	echo "Checking to see if all committed test/data files are in sdist."
+	diff -u $^
+
+sdist-files.txt: .FORCE
+	cabal sdist --list-only | sed 's/\.\///' | grep '^\(test\|data\)\/' | sort > $@
+
+git-files.txt: .FORCE
+	git ls-tree -r --name-only HEAD | grep '^\(test\|data\)\/' | sort > $@
+
+.PHONY: .FORCE deps quick full haddock install clean test bench changes_github dist prof download_stats reformat lint weigh doc/lua-filters.md pandoc-templates trypandoc update-website debpkg checkdocs ghcid ghci fix_spacing hlint check check-cabal

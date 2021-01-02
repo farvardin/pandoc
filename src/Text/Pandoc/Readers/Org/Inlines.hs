@@ -378,7 +378,10 @@ citation = try $ do
               else rest
 
 footnote :: PandocMonad m => OrgParser m (F Inlines)
-footnote = try $ inlineNote <|> referencedNote
+footnote = try $ do
+  note <- inlineNote <|> referencedNote
+  withNote <- getExportSetting exportWithFootnotes
+  return $ if withNote then note else mempty
 
 inlineNote :: PandocMonad m => OrgParser m (F Inlines)
 inlineNote = try $ do
@@ -474,17 +477,17 @@ linkToInlinesF linkStr =
 
 internalLink :: Text -> Inlines -> F Inlines
 internalLink link title = do
-  anchorB <- (link `elem`) <$> asksF orgStateAnchorIds
-  if anchorB
+  ids <- asksF orgStateAnchorIds
+  if link `elem` ids
     then return $ B.link ("#" <> link) "" title
-    else return $ B.emph title
+    else let attr' = ("", ["spurious-link"] , [("target", link)])
+         in return $ B.spanWith attr' (B.emph title)
 
 -- | Parse an anchor like @<<anchor-id>>@ and return an empty span with
 -- @anchor-id@ set as id.  Legal anchors in org-mode are defined through
 -- @org-target-regexp@, which is fairly liberal.  Since no link is created if
 -- @anchor-id@ contains spaces, we are more restrictive in what is accepted as
 -- an anchor.
-
 anchor :: PandocMonad m => OrgParser m (F Inlines)
 anchor =  try $ do
   anchorId <- parseAnchor
@@ -498,7 +501,6 @@ anchor =  try $ do
 
 -- | Replace every char but [a-zA-Z0-9_.-:] with a hyphen '-'.  This mirrors
 -- the org function @org-export-solidify-link-text@.
-
 solidify :: Text -> Text
 solidify = T.map replaceSpecialChar
  where replaceSpecialChar c
@@ -790,9 +792,12 @@ inlineLaTeX :: PandocMonad m => OrgParser m (F Inlines)
 inlineLaTeX = try $ do
   cmd <- inlineLaTeXCommand
   texOpt <- getExportSetting exportWithLatex
+  allowEntities <- getExportSetting exportWithEntities
   ils <- parseAsInlineLaTeX cmd texOpt
   maybe mzero returnF $
-     parseAsMathMLSym cmd `mplus` parseAsMath cmd texOpt `mplus` ils
+     parseAsMathMLSym allowEntities cmd `mplus`
+     parseAsMath cmd texOpt `mplus`
+     ils
  where
    parseAsInlineLaTeX :: PandocMonad m
                       => Text -> TeXExport -> OrgParser m (Maybe Inlines)
@@ -801,10 +806,15 @@ inlineLaTeX = try $ do
      TeXIgnore -> return (Just mempty)
      TeXVerbatim -> return (Just $ B.str cs)
 
-   parseAsMathMLSym :: Text -> Maybe Inlines
-   parseAsMathMLSym cs = B.str <$> MathMLEntityMap.getUnicode (clean cs)
-    -- drop initial backslash and any trailing "{}"
-    where clean = T.dropWhileEnd (`elem` ("{}" :: String)) . T.drop 1
+   parseAsMathMLSym :: Bool -> Text -> Maybe Inlines
+   parseAsMathMLSym allowEntities cs = do
+     -- drop initial backslash and any trailing "{}"
+     let clean = T.dropWhileEnd (`elem` ("{}" :: String)) . T.drop 1
+     -- If entities are disabled, then return the string as text, but
+     -- only if this *is* a MathML entity.
+     case B.str <$> MathMLEntityMap.getUnicode (clean cs) of
+       Just _ | not allowEntities -> Just $ B.str cs
+       x -> x
 
    state :: ParserState
    state = def{ stateOptions = def{ readerExtensions =

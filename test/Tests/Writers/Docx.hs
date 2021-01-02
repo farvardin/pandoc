@@ -84,6 +84,11 @@ tests = [ testGroup "inlines"
             "docx/lists_restarting.native"
             "docx/golden/lists_restarting.docx"
           , docxTest
+            "lists with multiple initial list levels"
+            def
+            "docx/lists_multiple_initial.native"
+            "docx/golden/lists_multiple_initial.docx"
+          , docxTest
             "definition lists"
             def
             "docx/definition_list.native"
@@ -123,6 +128,16 @@ tests = [ testGroup "inlines"
             def
             "docx/codeblock.native"
             "docx/golden/codeblock.docx"
+          , docxTest
+            "raw OOXML blocks"
+            def
+            "docx/raw-blocks.native"
+            "docx/golden/raw-blocks.docx"
+          , docxTest
+            "raw bookmark markers"
+            def
+            "docx/raw-bookmarks.native"
+            "docx/golden/raw-bookmarks.docx"
           ]
         , testGroup "track changes"
           [ docxTest
@@ -145,6 +160,11 @@ tests = [ testGroup "inlines"
             def
             "docx/comments.native"
             "docx/golden/comments.docx"
+          , docxTest
+            "scrubbed metadata"
+            def
+            "docx/track_changes_scrubbed_metadata.native"
+            "docx/golden/track_changes_scrubbed_metadata.docx"
           ]
         , testGroup "custom styles"
           [ docxTest "custom styles without reference.docx"

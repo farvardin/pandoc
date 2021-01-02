@@ -30,7 +30,7 @@ testWithFiles :: (ToString c)
               -> (T.Text, c)    -- ^ (input, expected value)
               -> TestTree
 testWithFiles fileDefs = test (orgWithFiles fileDefs)
-  where
+
 orgWithFiles :: [(FilePath, BS.ByteString)] -> T.Text -> Pandoc
 orgWithFiles fileDefs input =
   let readOrg' = readOrg def{ readerExtensions = getDefaultExtensions "org" }
@@ -150,6 +150,28 @@ tests =
                   ] =?>
         Pandoc nullMeta mempty
 
+    , "disable MathML-like entities" =:
+        T.unlines [ "#+OPTIONS: e:nil"
+                  , "Icelandic letter: \\thorn"
+                  ] =?>
+        para "Icelandic letter: \\thorn"
+
+    , testGroup "Option f"
+      [ "disable inline footnotes" =:
+        T.unlines [ "#+OPTIONS: f:nil"
+                  , "Funny![fn:funny:or not]"
+                  ] =?>
+        para "Funny!"
+
+      , "disable reference footnotes" =:
+        T.unlines [ "#+OPTIONS: f:nil"
+                  , "Burn everything[fn:1] down!"
+                  , ""
+                  , "[fn:2] Not quite everything."
+                  ] =?>
+        para "Burn everything down!"
+      ]
+
     , "disable inclusion of todo keywords" =:
         T.unlines [ "#+OPTIONS: todo:nil"
                   , "** DONE todo export"
@@ -256,6 +278,14 @@ tests =
                   , "* Wichtig"
                   ] =?>
         headerWith ("wichtig", mempty, mempty) 1 "Wichtig"
+      ]
+
+    , testGroup "Option |"
+      [ "disable export of tables" =:
+        T.unlines [ "#+OPTIONS: |:nil"
+                  , "| chair |"
+                  ] =?>
+        (mempty :: Blocks)
       ]
 
     , testGroup "unknown options"

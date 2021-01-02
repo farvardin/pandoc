@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE LambdaCase            #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedStrings     #-}
 {-# LANGUAGE ScopedTypeVariables   #-}
@@ -17,6 +18,8 @@ module Text.Pandoc.Readers.LaTeX.Parsing
   ( DottedNum(..)
   , renderDottedNum
   , incrementDottedNum
+  , TheoremSpec(..)
+  , TheoremStyle(..)
   , LaTeXState(..)
   , defaultLaTeXState
   , LP
@@ -66,6 +69,15 @@ module Text.Pandoc.Readers.LaTeX.Parsing
   , dimenarg
   , ignore
   , withRaw
+  , keyvals
+  , verbEnv
+  , begin_
+  , end_
+  , getRawCommand
+  , skipopts
+  , rawopt
+  , overlaySpecification
+  , getNextNumber
   ) where
 
 import Control.Applicative (many, (<|>))
@@ -93,7 +105,7 @@ import Text.Parsec.Pos
 -- import Debug.Trace
 
 newtype DottedNum = DottedNum [Int]
-  deriving (Show)
+  deriving (Show, Eq)
 
 renderDottedNum :: DottedNum -> T.Text
 renderDottedNum (DottedNum xs) = T.pack $
@@ -104,6 +116,20 @@ incrementDottedNum level (DottedNum ns) = DottedNum $
   case reverse (take level (ns ++ repeat 0)) of
        (x:xs) -> reverse (x+1 : xs)
        []     -> []  -- shouldn't happen
+
+data TheoremStyle =
+  PlainStyle | DefinitionStyle | RemarkStyle
+  deriving (Show, Eq)
+
+data TheoremSpec =
+  TheoremSpec
+    { theoremName    :: Inlines
+    , theoremStyle   :: TheoremStyle
+    , theoremSeries  :: Maybe Text
+    , theoremSyncTo  :: Maybe Text
+    , theoremNumber  :: Bool
+    , theoremLastNum :: DottedNum }
+    deriving (Show, Eq)
 
 data LaTeXState = LaTeXState{ sOptions       :: ReaderOptions
                             , sMeta          :: Meta
@@ -119,6 +145,8 @@ data LaTeXState = LaTeXState{ sOptions       :: ReaderOptions
                             , sLastHeaderNum :: DottedNum
                             , sLastFigureNum :: DottedNum
                             , sLastTableNum  :: DottedNum
+                            , sTheoremMap    :: M.Map Text TheoremSpec
+                            , sLastTheoremStyle :: TheoremStyle
                             , sLastLabel     :: Maybe Text
                             , sLabels        :: M.Map Text [Inline]
                             , sHasChapters   :: Bool
@@ -142,6 +170,8 @@ defaultLaTeXState = LaTeXState{ sOptions       = def
                               , sLastHeaderNum = DottedNum []
                               , sLastFigureNum = DottedNum []
                               , sLastTableNum  = DottedNum []
+                              , sTheoremMap    = M.empty
+                              , sLastTheoremStyle = PlainStyle
                               , sLastLabel     = Nothing
                               , sLabels        = M.empty
                               , sHasChapters   = False
@@ -455,7 +485,11 @@ doMacros' n inp =
            Nothing -> mzero
            Just (Macro expansionPoint argspecs optarg newtoks) -> do
              let getargs' = do
-                   args <- case optarg of
+                   args <-
+                     (case expansionPoint of
+                        ExpandWhenUsed    -> withVerbatimMode
+                        ExpandWhenDefined -> id)
+                     $ case optarg of
                              Nothing -> getargs M.empty argspecs
                              Just o  -> do
                                 x <- option o bracketedToks
@@ -695,3 +729,148 @@ withRaw parser = do
   let raw = takeWhile (\(Tok pos _ _) -> maybe True
                   (\p -> sourceName p /= sourceName pos || pos < p) nxtpos) inp
   return (result, raw)
+
+keyval :: PandocMonad m => LP m (Text, Text)
+keyval = try $ do
+  Tok _ Word key <- satisfyTok isWordTok
+  sp
+  val <- option mempty $ do
+           symbol '='
+           sp
+           (untokenize <$> braced) <|>
+             (mconcat <$> many1 (
+                 (untokenize . snd <$> withRaw braced)
+                 <|>
+                 (untokenize <$> many1
+                      (satisfyTok
+                         (\case
+                                Tok _ Symbol "]" -> False
+                                Tok _ Symbol "," -> False
+                                Tok _ Symbol "{" -> False
+                                Tok _ Symbol "}" -> False
+                                _                -> True)))))
+  optional (symbol ',')
+  sp
+  return (key, T.strip val)
+
+keyvals :: PandocMonad m => LP m [(Text, Text)]
+keyvals = try $ symbol '[' >> manyTill keyval (symbol ']') <* sp
+
+verbEnv :: PandocMonad m => Text -> LP m Text
+verbEnv name = withVerbatimMode $ do
+  optional blankline
+  res <- manyTill anyTok (end_ name)
+  return $ stripTrailingNewline
+         $ untokenize res
+
+-- Strip single final newline and any spaces following it.
+-- Input is unchanged if it doesn't end with newline +
+-- optional spaces.
+stripTrailingNewline :: Text -> Text
+stripTrailingNewline t =
+  let (b, e) = T.breakOnEnd "\n" t
+  in  if T.all (== ' ') e
+         then T.dropEnd 1 b
+         else t
+
+begin_ :: PandocMonad m => Text -> LP m ()
+begin_ t = try (do
+  controlSeq "begin"
+  spaces
+  txt <- untokenize <$> braced
+  guard (t == txt)) <?> ("\\begin{" ++ T.unpack t ++ "}")
+
+end_ :: PandocMonad m => Text -> LP m ()
+end_ t = try (do
+  controlSeq "end"
+  spaces
+  txt <- untokenize <$> braced
+  guard $ t == txt) <?> ("\\end{" ++ T.unpack t ++ "}")
+
+getRawCommand :: PandocMonad m => Text -> Text -> LP m Text
+getRawCommand name txt = do
+  (_, rawargs) <- withRaw $
+      case name of
+           "write" -> do
+             void $ satisfyTok isWordTok -- digits
+             void braced
+           "titleformat" -> do
+             void braced
+             skipopts
+             void $ count 4 braced
+           "def" ->
+             void $ manyTill anyTok braced
+           _ | isFontSizeCommand name -> return ()
+             | otherwise -> do
+               skipopts
+               option "" (try dimenarg)
+               void $ many braced
+  return $ txt <> untokenize rawargs
+
+skipopts :: PandocMonad m => LP m ()
+skipopts = skipMany (void overlaySpecification <|> void rawopt)
+
+-- opts in angle brackets are used in beamer
+overlaySpecification :: PandocMonad m => LP m Text
+overlaySpecification = try $ do
+  symbol '<'
+  t <- untokenize <$> manyTill overlayTok (symbol '>')
+  -- see issue #3368
+  guard $ not (T.all isLetter t) ||
+          t `elem` ["beamer","presentation", "trans",
+                    "handout","article", "second"]
+  return $ "<" <> t <> ">"
+
+overlayTok :: PandocMonad m => LP m Tok
+overlayTok =
+  satisfyTok (\case
+                    Tok _ Word _       -> True
+                    Tok _ Spaces _     -> True
+                    Tok _ Symbol c     -> c `elem` ["-","+","@","|",":",","]
+                    _                  -> False)
+
+rawopt :: PandocMonad m => LP m Text
+rawopt = try $ do
+  sp
+  inner <- untokenize <$> bracketedToks
+  sp
+  return $ "[" <> inner <> "]"
+
+isFontSizeCommand :: Text -> Bool
+isFontSizeCommand "tiny" = True
+isFontSizeCommand "scriptsize" = True
+isFontSizeCommand "footnotesize" = True
+isFontSizeCommand "small" = True
+isFontSizeCommand "normalsize" = True
+isFontSizeCommand "large" = True
+isFontSizeCommand "Large" = True
+isFontSizeCommand "LARGE" = True
+isFontSizeCommand "huge" = True
+isFontSizeCommand "Huge" = True
+isFontSizeCommand _ = False
+
+getNextNumber :: Monad m
+              => (LaTeXState -> DottedNum) -> LP m DottedNum
+getNextNumber getCurrentNum = do
+  st <- getState
+  let chapnum =
+        case sLastHeaderNum st of
+             DottedNum (n:_) | sHasChapters st -> Just n
+             _                                 -> Nothing
+  return . DottedNum $
+    case getCurrentNum st of
+       DottedNum [m,n]  ->
+         case chapnum of
+              Just m' | m' == m   -> [m, n+1]
+                      | otherwise -> [m', 1]
+              Nothing             -> [1]
+                                      -- shouldn't happen
+       DottedNum [n]   ->
+         case chapnum of
+              Just m  -> [m, 1]
+              Nothing -> [n + 1]
+       _               ->
+         case chapnum of
+               Just n  -> [n, 1]
+               Nothing -> [1]
+

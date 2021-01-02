@@ -14,7 +14,6 @@ module Tests.Old (tests) where
 
 import Prelude
 import Data.Algorithm.Diff
-import Prelude hiding (readFile)
 import Data.List (intercalate)
 import Data.Maybe (catMaybes)
 import System.Exit
@@ -59,7 +58,7 @@ tests pandocPath =
     ]
   , testGroup "latex"
     [ testGroup "writer"
-        (writerTests' "latex" ++ lhsWriterTests' "latex")
+        (extWriterTests' "latex" ++ lhsWriterTests' "latex")
     , testGroup "reader"
       [ test' "basic" ["-r", "latex+raw_tex", "-w", "native", "-s"]
         "latex-reader.latex" "latex-reader.native"
@@ -67,8 +66,11 @@ tests pandocPath =
       ]
     ]
   , testGroup "html"
-    [ testGroup "writer" (writerTests' "html4" ++ writerTests' "html5" ++
-        lhsWriterTests' "html")
+    [ testGroup "writer" $ mconcat
+      [ extWriterTests' "html4"
+      , extWriterTests' "html5"
+      , lhsWriterTests' "html"
+      ]
     , test' "reader" ["-r", "html", "-w", "native", "-s"]
       "html-reader.html" "html-reader.native"
     ]
@@ -99,7 +101,7 @@ tests pandocPath =
   , testGroup "jats"
     [ testGroup "writer"
       [ testGroup "jats_archiving" $
-        writerTests' "jats_archiving"
+        extWriterTests' "jats_archiving"
       , testGroup "jats_articleauthoring" $
         writerTests' "jats_articleauthoring"
       , testGroup "jats_publishing" $
@@ -213,7 +215,8 @@ tests pandocPath =
     [ test' "reader" ["-f", "ipynb-raw_html-raw_tex+raw_attribute",
                       "-t", "native", "-s"]
       "ipynb/simple.ipynb" "ipynb/simple.out.native"
-    , test' "writer" ["-f", "native", "-t",
+    , test' "writer" ["-f", "native",
+                      "--markdown-headings=setext", "-t",
                       "ipynb-raw_html-raw_tex+raw_attribute", "-s"]
       "ipynb/simple.in.native" "ipynb/simple.ipynb"
     ]
@@ -225,6 +228,7 @@ tests pandocPath =
     fb2WriterTest'  = fb2WriterTest pandocPath
     lhsWriterTests' = lhsWriterTests pandocPath
     lhsReaderTest'  = lhsReaderTest pandocPath
+    extWriterTests' = extendedWriterTests pandocPath
 
 -- makes sure file is fully closed after reading
 readFile' :: FilePath -> IO String
@@ -238,7 +242,8 @@ lhsWriterTests pandocPath format
     ]
   where
     t n f = test pandocPath
-             n ["--wrap=preserve", "-r", "native", "-s", "-w", f]
+             n ["--wrap=preserve", "-r", "native", "-s",
+              "--markdown-headings=setext", "-w", f]
              "lhs-test.native" ("lhs-test" <.> f)
 
 lhsReaderTest :: FilePath -> String -> TestTree
@@ -260,6 +265,20 @@ writerTests pandocPath format
     opts = ["-r", "native", "-w", format, "--columns=78",
             "--variable", "pandoc-version="]
 
+extendedWriterTests :: FilePath -> String -> [TestTree]
+extendedWriterTests pandocPath format
+  = writerTests pandocPath format ++
+    let testForTable name =
+          test pandocPath
+               (name ++ " table")
+               opts
+               ("tables" </> name <.> "native")
+               ("tables" </> name <.> format)
+    in map testForTable ["planets", "nordics", "students"]
+  where
+    opts = ["-r", "native", "-w", format, "--columns=78",
+            "--variable", "pandoc-version="]
+
 s5WriterTest :: FilePath -> String -> [String] -> String -> TestTree
 s5WriterTest pandocPath modifier opts format
   = test pandocPath (format ++ " writer (" ++ modifier ++ ")")
@@ -273,7 +292,7 @@ fb2WriterTest pandocPath title opts inputfile normfile =
   where
     formatXML xml = splitTags $ zip xml (drop 1 xml)
     splitTags []               = []
-    splitTags [end]            = fst end : snd end : []
+    splitTags [end]            = [fst end, snd end]
     splitTags (('>','<'):rest) = ">\n" ++ splitTags rest
     splitTags ((c,_):rest)     = c : splitTags rest
     ignoreBinary = unlines . filter (not . startsWith "<binary ") . lines
