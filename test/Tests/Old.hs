@@ -160,7 +160,7 @@ tests pandocPath =
       "haddock-reader.haddock" "haddock-reader.native"
     ]
   , testGroup "txt2tags"
-    [ testGroup "writer" $ writerTests' "t2t"
+    [ testGroup "writer" $ writerTests' "txt2tags"
     , test' "reader" ["-r", "t2t", "-w", "native", "-s"]
         "txt2tags.t2t" "txt2tags.native" ]
   , testGroup "epub" [
