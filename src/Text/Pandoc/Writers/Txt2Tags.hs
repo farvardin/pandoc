@@ -145,7 +145,7 @@ blockToTxt2Tags opts (Header level _ inlines) = do
   -- emphasis, links etc. not allowed in headers, apparently,
   -- so we remove formatting:
   contents <- inlineListToTxt2Tags opts $ removeFormatting inlines
-  let eqs = T.replicate ( level ) "="
+  let eqs = T.replicate level "="
   return $ eqs <> " " <> contents <> " " <> eqs <> "\n"
 
 blockToTxt2Tags _ (CodeBlock (_,classes,_) str) = do
