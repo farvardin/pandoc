@@ -333,6 +333,7 @@ extra-source-files:
                  test/writer.rst
                  test/writer.icml
                  test/writer.rtf
+                 test/writer.t2t
                  test/writer.tei
                  test/writer.texinfo
                  test/writer.fb2
