@@ -298,6 +298,7 @@ extra-source-files:
                  test/tables.texinfo
                  test/tables.rst
                  test/tables.rtf
+                 test/tables.t2t
                  test/tables.txt
                  test/tables.fb2
                  test/tables.muse

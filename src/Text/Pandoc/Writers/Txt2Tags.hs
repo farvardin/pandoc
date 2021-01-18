@@ -156,7 +156,7 @@ blockToTxt2Tags _ (CodeBlock (_,classes,_) str) = do
                        "javascript", "latex", "lisp", "lua", "matlab", "mirc", "mpasm", "mysql", "nsis", "objc",
                        "ocaml", "ocaml-brief", "oobas", "oracle8", "pascal", "perl", "php", "php-brief", "plsql",
                        "python", "qbasic", "rails", "reg", "robots", "ruby", "sas", "scheme", "sdlbasic",
-                       "smalltalk", "smarty", "sql", "tcl", "", "thinbasic", "tsql", "vb", "vbnet", "vhdl",
+                       "smalltalk", "smarty", "sql", "tcl",  "thinbasic", "tsql", "vb", "vbnet", "vhdl",
                        "visualfoxpro", "winbatch", "xml", "xpp", "z80"]
   return $ "```" <>
                 (case at of
