@@ -165,8 +165,8 @@ blockToTxt2Tags _ (CodeBlock (_,classes,_) str) = do
 blockToTxt2Tags opts (BlockQuote blocks) = do
   contents <- blockListToTxt2Tags opts blocks
   if isSimpleBlockQuote blocks
-     then return $ T.unlines $ map ("> " <>) $ T.lines contents
-     else return $ "<HTML><blockquote>\n" <> contents <> "</blockquote></HTML>"
+     then return $ T.unlines $ map ("\t" <>) $ T.lines contents
+     else return $ "```\n" <> contents <> "```"
 
 blockToTxt2Tags opts (Table _ blkCapt specs thead tbody tfoot) = do
   let (capt, aligns, _, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
@@ -205,7 +205,7 @@ blockToTxt2Tags opts x@(BulletList items) = do
      then do
         contents <- local (\s -> s { stUseTags = True })
                       (mapM (listItemToTxt2Tags opts) items)
-        return $ "<HTML><ul></HTML>\n" <> vcat contents <> "<HTML></ul></HTML>\n"
+        return $ "```\n" <> vcat contents <> "```\n"
      else do
         contents <- local (\s -> s { stIndent = stIndent s <> "  "
                                    , stBackSlashLB = backSlash})
