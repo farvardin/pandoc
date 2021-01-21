@@ -176,7 +176,7 @@ writers = [
   ,("xwiki"        , TextWriter writeXWiki)
   ,("zimwiki"      , TextWriter writeZimWiki)
   ,("textile"      , TextWriter writeTextile)
-  ,("txt2tags"     , TextWriter writeTxt2Tags)
+  ,("t2t"          , TextWriter writeTxt2Tags)
   ,("rtf"          , TextWriter writeRTF)
   ,("org"          , TextWriter writeOrg)
   ,("asciidoc"     , TextWriter writeAsciiDoc)

@@ -80,7 +80,7 @@ data-files:
                  data/templates/default.asciidoctor
                  data/templates/default.haddock
                  data/templates/default.textile
-                 data/templates/default.txt2tags
+                 data/templates/default.t2t
                  data/templates/default.org
                  data/templates/default.epub2
                  data/templates/default.epub3

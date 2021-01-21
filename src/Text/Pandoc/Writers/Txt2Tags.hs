@@ -20,8 +20,7 @@ Txt2Tags:  <https://www.Txt2Tags.org/>
    - Definition lists are broken
    - Tables could be improved
    - Some formats make better results than others (html is ok, md is somehow broken)
-   - code related to dokuwiki only could be removed
-   - a test case should be made
+   - code related to only dokuwiki could be removed
 -}
 
 module Text.Pandoc.Writers.Txt2Tags ( writeTxt2Tags ) where
@@ -139,7 +138,7 @@ blockToTxt2Tags _ b@(RawBlock f str)
   | otherwise              = "" <$
          report (BlockNotRendered b)
 
-blockToTxt2Tags _ HorizontalRule = return "\n---------------\n"
+blockToTxt2Tags _ HorizontalRule = return "\n---------------------\n"
 
 blockToTxt2Tags opts (Header level _ inlines) = do
   -- emphasis, links etc. not allowed in headers, apparently,
