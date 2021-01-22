@@ -1,9 +1,3 @@
-
-
-
-
-
-
 This is a set of tests for pandoc. Most of them are adapted from John Gruber’s markdown test suite.
 
 
@@ -52,9 +46,9 @@ here.
 
 E-mail style:
 
-> This is a block quote. It is pretty short.
+	This is a block quote. It is pretty short.
 
-<HTML><blockquote>
+```
 Code in a block quote:
 
 ```
@@ -69,10 +63,10 @@ A list:
 
 Nested block quotes:
 
-> nested
+	nested
 
-> nested
-</blockquote></HTML>
+	nested
+```
 This should not be a block quote: 2 > 1.
 
 And a following paragraph.
@@ -171,11 +165,11 @@ and using spaces:
 
 Multiple paragraphs:
 
-<HTML><ol style="list-style-type: decimal;"></HTML>
++  style="list-style-type: decimal;">
 <HTML><li></HTML><HTML><p></HTML>Item 1, graf one.<HTML></p></HTML>
 <HTML><p></HTML>Item 1. graf two. The quick brown fox jumped over the lazy dog’s back.<HTML></p></HTML><HTML></li></HTML>
 <HTML><li></HTML><HTML><p></HTML>Item 2.<HTML></p></HTML><HTML></li></HTML>
-<HTML><li></HTML><HTML><p></HTML>Item 3.<HTML></p></HTML><HTML></li></HTML><HTML></ol></HTML>
+<HTML><li></HTML><HTML><p></HTML>Item 3.<HTML></p></HTML><HTML></li></HTML>
 
 == Nested ==
 
@@ -210,32 +204,32 @@ Same thing but with paragraphs:
 
 == Fancy list markers ==
 
-<HTML><ol start="2" style="list-style-type: decimal;"></HTML>
++  start="2" style="list-style-type: decimal;">
 <HTML><li></HTML><HTML><p></HTML>begins with 2<HTML></p></HTML><HTML></li></HTML>
 <HTML><li></HTML><HTML><p></HTML>and now 3<HTML></p></HTML>
 <HTML><p></HTML>with a continuation<HTML></p></HTML>
-<HTML><ol start="4" style="list-style-type: lower-roman;"></HTML>
++  start="4" style="list-style-type: lower-roman;">
 <HTML><li></HTML>sublist with roman numerals, starting with 4<HTML></li></HTML>
 <HTML><li></HTML>more items
-<HTML><ol style="list-style-type: upper-alpha;"></HTML>
++  style="list-style-type: upper-alpha;">
 <HTML><li></HTML>a subsublist<HTML></li></HTML>
-<HTML><li></HTML>a subsublist<HTML></li></HTML><HTML></ol></HTML>
-<HTML></li></HTML><HTML></ol></HTML>
-<HTML></li></HTML><HTML></ol></HTML>
+<HTML><li></HTML>a subsublist<HTML></li></HTML>
+<HTML></li></HTML>
+<HTML></li></HTML>
 
 Nesting:
 
-<HTML><ol style="list-style-type: upper-alpha;"></HTML>
++  style="list-style-type: upper-alpha;">
 <HTML><li></HTML>Upper Alpha
-<HTML><ol style="list-style-type: upper-roman;"></HTML>
++  style="list-style-type: upper-roman;">
 <HTML><li></HTML>Upper Roman.
-<HTML><ol start="6" style="list-style-type: decimal;"></HTML>
++  start="6" style="list-style-type: decimal;">
 <HTML><li></HTML>Decimal start with 6
-<HTML><ol start="3" style="list-style-type: lower-alpha;"></HTML>
-<HTML><li></HTML>Lower alpha with paren<HTML></li></HTML><HTML></ol></HTML>
-<HTML></li></HTML><HTML></ol></HTML>
-<HTML></li></HTML><HTML></ol></HTML>
-<HTML></li></HTML><HTML></ol></HTML>
++  start="3" style="list-style-type: lower-alpha;">
+<HTML><li></HTML>Lower alpha with paren<HTML></li></HTML>
+<HTML></li></HTML>
+<HTML></li></HTML>
+<HTML></li></HTML>
 
 Autonumbering:
 
@@ -274,7 +268,7 @@ Loose:
 
 Multiple blocks with italics:
 
-<HTML><dl></HTML>
+: 
 <HTML><dt></HTML>//apple//<HTML></dt></HTML>
 <HTML><dd></HTML><HTML><p></HTML>red fruit<HTML></p></HTML>
 <HTML><p></HTML>contains seeds, crisp, pleasant to taste<HTML></p></HTML><HTML></dd></HTML>
@@ -283,8 +277,8 @@ Multiple blocks with italics:
 ```
 { orange code block }
 ```
-> <HTML><p></HTML>orange block quote<HTML></p></HTML>
-<HTML></dd></HTML><HTML></dl></HTML>
+	<HTML><p></HTML>orange block quote<HTML></p></HTML>
+<HTML></dd></HTML>
 
 Multiple definitions, tight:
 
@@ -610,7 +604,7 @@ With an ampersand: http://example.com/?foo=1&bar=2
 
 An e-mail address: <nobody@nowhere.net>
 
-> Blockquoted: http://example.com/
+	Blockquoted: http://example.com/
 
 Auto-links should not occur here: ''%%<http://example.com/>%%''
 
@@ -645,8 +639,8 @@ If you want, you can indent every line, but you can also be lazy and just indent
 )) This should //not// be a footnote reference, because it contains a space.[^my note] Here is an inline note.((This is //easier// to type. Inline notes may contain [links http://google.com] and ''%%]%%'' verbatim characters, as well as [bracketed text].
 ))
 
-> Notes can go in quotes.((In quote.
-> ))
+	Notes can go in quotes.((In quote.
+	))
 
   + And in list items.((In list.))
 

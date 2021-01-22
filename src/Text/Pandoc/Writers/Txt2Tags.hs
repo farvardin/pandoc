@@ -221,7 +221,7 @@ blockToTxt2Tags opts x@(OrderedList attribs items) = do
      then do
         contents <- local (\s -> s { stUseTags = True })
                       (mapM (orderedListItemToTxt2Tags opts) items)
-        return $ "<HTML><ol" <> listAttribsToString attribs <> "></HTML>\n" <> vcat contents <> "<HTML></ol></HTML>\n"
+        return $ "+ " <> listAttribsToString attribs <> ">\n" <> vcat contents <> "\n"
      else do
         contents <- local (\s -> s { stIndent = stIndent s <> "  "
                                    , stBackSlashLB = backSlash})
@@ -240,7 +240,7 @@ blockToTxt2Tags opts x@(DefinitionList items) = do
      then do
         contents <- local (\s -> s { stUseTags = True })
                       (mapM (definitionListItemToTxt2Tags opts) items)
-        return $ "<HTML><dl></HTML>\n" <> vcat contents <> "<HTML></dl></HTML>\n"
+        return $ ": \n" <> vcat contents <> "\n"
      else do
         contents <- local (\s -> s { stIndent = stIndent s <> "  "
                                    , stBackSlashLB = backSlash})
