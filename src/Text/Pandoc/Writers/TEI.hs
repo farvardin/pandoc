@@ -2,7 +2,7 @@
 {-# LANGUAGE PatternGuards     #-}
 {- |
    Module      : Text.Pandoc.Writers.Docbook
-   Copyright   : Copyright (C) 2006-2021 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -28,7 +28,8 @@ import Text.Pandoc.XML
 
 -- | Convert Pandoc document to string in Docbook format.
 writeTEI :: PandocMonad m => WriterOptions -> Pandoc -> m Text
-writeTEI opts (Pandoc meta blocks) = do
+writeTEI opts doc = do
+  let Pandoc meta blocks = ensureValidXmlIdentifiers doc
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
@@ -146,16 +147,17 @@ blockToTEI opts (LineBlock lns) =
   blockToTEI opts $ linesToPara lns
 blockToTEI opts (BlockQuote blocks) =
   inTagsIndented "quote" <$> blocksToTEI opts blocks
-blockToTEI _ (CodeBlock (_,classes,_) str) =
+blockToTEI opts (CodeBlock (_,classes,_) str) =
   return $ literal ("<ab type='codeblock " <> lang <> "'>") <> cr <>
      flush (literal (escapeStringForXML str) <> cr <> text "</ab>")
     where lang  = if null langs
                      then ""
                      else escapeStringForXML (head langs)
-          isLang l    = T.toLower l `elem` map T.toLower languages
+          syntaxMap = writerSyntaxMap opts
+          isLang l    = T.toLower l `elem` map T.toLower (languages syntaxMap)
           langsFrom s = if isLang s
                            then [s]
-                           else languagesByExtension . T.toLower $ s
+                           else (languagesByExtension syntaxMap) . T.toLower $ s
           langs       = concatMap langsFrom classes
 blockToTEI opts (BulletList lst) = do
   let attribs = [("type", "unordered")]
@@ -191,7 +193,7 @@ blockToTEI _ HorizontalRule = return $
                              ,("type","separator")
                              ,("rendition","line")]
 
--- | TEI Tables
+-- TEI Tables
 -- TEI Simple's tables are composed of cells and rows; other
 -- table info in the AST is here lossily discard.
 blockToTEI opts (Table _ blkCapt specs thead tbody tfoot) = do

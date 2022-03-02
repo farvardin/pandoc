@@ -25,8 +25,7 @@ The following export keywords are supported:
 - LANGUAGE: document language; included as plain-text metadata
   field `lang`. The value should be a [BCP47 language tag].
 
-- SELECT_TAGS: tags which select a tree for export. Currently
-  *unsupported*.
+- SELECT_TAGS: tags which select a tree for export.
 
 - EXCLUDE\_TAGS: tags which prevent a subtree from being
   exported. Fully supported.
@@ -36,6 +35,21 @@ The following export keywords are supported:
 - EXPORT\_FILE\_NAME: target filename; *unsupported*, the output
   defaults to stdout unless a target has to be given as a command
   line option.
+
+::: {.alert .alert-info}
+Pandoc tries to be compatible with org-mode when exporting an org document. If
+you find some behavior confusing, please do refer to org-mode
+[Export-Settings](https://orgmode.org/manual/Export-Settings.html)
+documentation. For example, a common confusion
+([#3214](https://github.com/jgm/pandoc/issues/3214 "Problem with headers lower
+then 3 in org-mode reader"), [#5169](https://github.com/jgm/pandoc/issues/5169
+"org mode headings past level three converted to numbered outline list"),
+[#6145](https://github.com/jgm/pandoc/issues/6145 "Headers 4 levels deep render
+differently"), [#7236](https://github.com/jgm/pandoc/issues/7236 "In Org mode,
+Header with level > 3 are not recognized as headers")) is treatment of headers
+with level > 3 differently because org-mode sets `org-export-headline-levels`
+(configurable with `#+OPTIONS: H:3`) to 3 by default.
+:::
 
 [BCP47 language tag]: https://tools.ietf.org/html/bcp47
 
@@ -153,120 +167,6 @@ function Meta (meta)
 end
 ```
 
-Citations
-=========
-
-Emacs org-mode lacks an official citation syntax, leading to
-multiple syntaxes coexisting. Pandoc recognizes four different
-syntaxes for citations.
-
-Citation support for org-mode is enabled by default. Support can
-be toggled off by disabling the `citation` extension; e.g.
-`pandoc --from=org-citations`.
-
-Berkeley-style citations
-------------------------
-
-The semi-official Org-mode citation syntax was designed by Richard
-Lawrence with additions by contributors on the [emacs-orgmode
-mailing list]. It is based on John MacFarlane's pandoc Markdown
-syntax. It's dubbed Berkeley syntax due the place of activity of
-its creators, both philosophers at UC Berkeley.
-
-### Simple in-text citation
-
-This is the simplest form of citation. It consists of the citation
-ID prefixed by '@'.
-
-Example:
-
-    @WatsonCrick1953 showed that DNA forms a double-helix.
-
-### In-text citation list
-
-Citations presented in the text unparenthesized are called
-*in-text citations*. The syntax for these citations is
-
-    [cite: PREFIX; INDIVIDUAL-REFERENCE; ... INDIVIDUAL-REFERENCE; SUFFIX]
-
-where the initial PREFIX and final SUFFIX are optional. At least
-one INDIVIDUAL-REFERENCE must be present. The colon and
-semicolons here are literal and indicate the end of the TAG and
-the end of a PREFIX or INDIVIDUAL-REFERENCE respectively.
-
-An INDIVIDUAL-REFERENCE has the format:
-
-    PREFIX KEY SUFFIX
-
-The KEY is obligatory, and the prefix and suffix are optional.
-
-A PREFIX or SUFFIX is arbitrary text (except `;`, `]`, and
-citation keys).
-
-Example:
-
-    [cite: See; @Mandelkern1981; and @Watson1953]
-
-### Parenthetical citation
-
-Citations surrounded by parentheses. The syntax is identical to
-in-text citations, except for the additional parentheses enclosing
-the initial `cite` tag.
-
-    [(cite): See; @Mandelkern1981; and @Watson1953]
-
-[emacs-orgmode mailing list]: https://lists.gnu.org/archive/html/emacs-orgmode/2015-02/msg00932.html
-
-org-ref citations
------------------
-
-The [org-ref] package by [John Kitchen] is in wide use to handle
-citations and has excellent tooling support in Emacs. Its
-citation syntax is geared towards users in the natural sciences
-but still very flexible regardless.
-
-    cite:doe_john_2000
-    citep:doe_jane_1989
-    [[citep:Dominik201408][See page 20 of::, for example]]
-
-
-Pandoc-Markdown-like syntax
----------------------------
-
-Historically, Markdown-style citations syntax was the first that
-was added to pandoc's org reader. It is close to Markdown's
-citation syntax.
-
-Citations go inside square brackets and are separated by
-semicolons. Each citation must have a key, composed of '@' plus
-the citation identifier from the database, and may optionally
-have a prefix, a locator, and a suffix. The citation key must
-begin with a letter, digit, or `_`, and may contain
-alphanumerics, `_`, and internal punctuation characters
-(`:.#$%&-+?<>~/`). Here are some examples:
-
-### Simple citation
-
-The simplest method to insert a citation is to write the citation
-ID prefixed by '@'.
-
-
-Example:
-
-    [prefix @citekey suffix]
-    [see @doe2000 pp. 23-42]
-    [@doe2000 p. 5; to a lesser extend @doe2005]
-
-
-LaTeX-Syntax
-------------
-
-Use normal latex citation commands like `\cite{x}` or
-`\citet{y}`.
-
-[org-ref]: https://github.com/jkitchin/org-ref
-[John Kitchen]: https://kitchingroup.cheme.cmu.edu/
-
 Tables
 ======
 
@@ -353,6 +253,28 @@ provide the options line on the command line:
     pandoc -f org <(printf "#+OPTIONS: -:nil\n") …
 
 [export setting]: https://orgmode.org/manual/Export-Settings.html
+
+`fancy_lists` extension
+=======================
+
+Org-mode has a variable `org-list-allow-alphabetical` that when
+set to `t`, allows ordered lists with single-character
+alphabetical markers. Since this variable is `nil` by default,
+alphabetical markers can be optionally enabled in Pandoc by
+enabling the `fancy_lists` extension.
+
+When `fancy_lists` is enabled, Pandoc will also parse list
+markers starting with one lowercase or uppercase alphabetical
+character, like `a.` and `D)`. Countrary to the use of this
+extension in markdown, roman numerals or the `#` placeholder
+can't be used as markers as they are not allowed in Org-mode.
+
+One additional behavior that is enabled by the `fancy_lists`
+extension is that the `.` and `)` delimiters for list markers
+will be distinguished by Pandoc. In essence, this means that when
+converting Org into formats like LaTeX, Pandoc will respect the
+type of delimiter that you used in your Org file, instead of
+always using the default delimiter for the exported format.
 
 Currently unsupported features
 ==============================

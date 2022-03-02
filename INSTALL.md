@@ -34,6 +34,10 @@ without SVG support), [Python] (to use Pandoc filters), and
 
     choco install rsvg-convert python miktex
 
+Using multiple installation methods can result in two separate
+installations of pandoc; it is recommended to properly uninstall
+pandoc before switching to an alternative installation method.
+
 By default, Pandoc creates PDFs using LaTeX.
 We recommend installing it via [MiKTeX].
 
@@ -45,7 +49,7 @@ by downloading [this script][uninstaller]
 and running it with `perl uninstall-pandoc.pl`.
 
 Alternatively, you can install pandoc using
-[Homebrew](http://brew.sh):
+[Homebrew](https://brew.sh):
 
      brew install pandoc
 
@@ -116,7 +120,7 @@ package repositories.  For example, on Debian/Ubuntu,
 you can install it with `apt-get install haskell-platform`.
 
 For PDF output, you'll need LaTeX.  We recommend installing
-[TeX Live](http://www.tug.org/texlive/) via your package
+[TeX Live](https://www.tug.org/texlive/) via your package
 manager.  (On Debian/Ubuntu, `apt-get install texlive`.)
 
 ## Chrome OS
@@ -158,6 +162,11 @@ To run pandoc using Docker, converting `README.md` to `README.pdf`:
 Pandoc can be run through
 [GitHub Actions](https://github.com/features/actions).  For some
 examples, see <https://github.com/pandoc/pandoc-action-example>.
+
+## GitLab CI/CD
+
+Pandoc can be run through [GitLab CI/CD].  For some
+examples, see <https://gitlab.com/pandoc/pandoc-ci-example>.
 
 ## Compiling from source
 
@@ -238,7 +247,7 @@ The easiest way to build pandoc from source is to use [stack][stack]:
 
         pandoc --help
 
-    [Not sure where `$CABALDIR` is?](http://www.haskell.org/haskellwiki/Cabal-Install#The_cabal-install_configuration_file)
+    [Not sure where `$CABALDIR` is?](https://wiki.haskell.org/Cabal-Install#The_cabal-install_configuration_file)
 
 5.  By default `pandoc` uses the "i;unicode-casemap" method
     to sort bibliography entries (RFC 5051).  If you would like to
@@ -383,30 +392,30 @@ To run just the markdown benchmarks:
 
 
 [Arch]: https://www.archlinux.org/packages/community/x86_64/pandoc/
-[Cabal User's Guide]: http://www.haskell.org/cabal/release/latest/doc/users-guide/builders.html#setup-configure-paths
+[Cabal User's Guide]: https://cabal.readthedocs.io/
 [Debian]: https://packages.debian.org/pandoc
 [Fedora]: https://apps.fedoraproject.org/packages/pandoc
-[FreeBSD ports]: http://www.freshports.org/textproc/hs-pandoc/
-[GHC]:  http://www.haskell.org/ghc/
-[GPL]:  http://www.gnu.org/copyleft/gpl.html
-[Haskell platform]: http://hackage.haskell.org/platform/
-[MacPorts]: http://trac.macports.org/browser/trunk/dports/textproc/pandoc/Portfile
+[FreeBSD ports]: https://www.freshports.org/textproc/hs-pandoc/
+[GHC]:  https://www.haskell.org/ghc/
+[GitLab CI/CD]: https://about.gitlab.com/stages-devops-lifecycle/continuous-integration/
+[Haskell platform]: https://hackage.haskell.org/platform/
+[MacPorts]: https://trac.macports.org/browser/trunk/dports/textproc/pandoc/Portfile
 [MacTeX]: https://tug.org/mactex/
-[BasicTeX]: http://www.tug.org/mactex/morepackages.html
+[BasicTeX]: https://www.tug.org/mactex/morepackages.html
 [LaTeX]: https://www.latex-project.org
-[MiKTeX]: http://miktex.org/
+[MiKTeX]: https://miktex.org/
 [librsvg]: https://wiki.gnome.org/Projects/LibRsvg
 [Python]: https://www.python.org
-[NetBSD]: http://pkgsrc.se/wip/pandoc
+[NetBSD]: https://pkgsrc.se/wip/pandoc
 [NixOS]: https://nixos.org/nixos/packages.html
 [Slackware]: https://www.slackbuilds.org/result/?search=pandoc&sv=
 [Ubuntu]: https://packages.ubuntu.com/pandoc
 [download page]: https://github.com/jgm/pandoc/releases/latest
-[gentoo]: http://packages.gentoo.org/package/app-text/pandoc
+[gentoo]: https://packages.gentoo.org/package/app-text/pandoc
 [haskell repository]: https://wiki.archlinux.org/index.php/Haskell_Package_Guidelines#.5Bhaskell.5D
 [openSUSE]: https://software.opensuse.org/package/pandoc
-[source tarball]: http://hackage.haskell.org/package/pandoc
+[source tarball]: https://hackage.haskell.org/package/pandoc
 [stack]: https://docs.haskellstack.org/en/stable/install_and_upgrade.html
-[cabal-install]: http://hackage.haskell.org/package/cabal-install
+[cabal-install]: https://hackage.haskell.org/package/cabal-install
 [Void]: https://voidlinux.org/
 [uninstaller]: https://raw.githubusercontent.com/jgm/pandoc/master/macos/uninstall-pandoc.pl

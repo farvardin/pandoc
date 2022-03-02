@@ -3,8 +3,8 @@
 {- |
    Module      : Text.Pandoc.Writers.Org
    Copyright   : © 2010-2015 Puneeth Chaganti <punchagan@gmail.com>
-                   2010-2021 John MacFarlane <jgm@berkeley.edu>
-                   2016-2021 Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
+                   2010-2022 John MacFarlane <jgm@berkeley.edu>
+                   2016-2022 Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -17,10 +17,12 @@ Org-Mode:  <http://orgmode.org>
 -}
 module Text.Pandoc.Writers.Org (writeOrg) where
 import Control.Monad.State.Strict
-import Data.Char (isAlphaNum)
+import Data.Char (isAlphaNum, isDigit)
 import Data.List (intersect, intersperse, partition, transpose)
+import Data.List.NonEmpty (nonEmpty)
 import Data.Text (Text)
 import qualified Data.Text as T
+import qualified Data.Map as M
 import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
 import Text.Pandoc.Definition
 import Text.Pandoc.Logging
@@ -28,6 +30,7 @@ import Text.Pandoc.Options
 import Text.DocLayout
 import Text.Pandoc.Shared
 import Text.Pandoc.Templates (renderTemplate)
+import Text.Pandoc.Citeproc.Locator (parseLocator, LocatorMap(..), LocatorInfo(..))
 import Text.Pandoc.Writers.Shared
 
 data WriterState =
@@ -83,12 +86,15 @@ noteToOrg num note = do
 
 -- | Escape special characters for Org.
 escapeString :: Text -> Text
-escapeString = escapeStringUsing
-               [ ('\x2014',"---")
-               , ('\x2013',"--")
-               , ('\x2019',"'")
-               , ('\x2026',"...")
-               ]
+escapeString t
+  | T.all (\c -> c < '\x2013' || c > '\x2026') t = t
+  | otherwise = T.concatMap escChar t
+  where
+   escChar '\x2013' = "--"
+   escChar '\x2014' = "---"
+   escChar '\x2019' = "'"
+   escChar '\x2026' = "..."
+   escChar c        = T.singleton c
 
 isRawFormat :: Format -> Bool
 isRawFormat f =
@@ -99,11 +105,14 @@ blockToOrg :: PandocMonad m
            => Block         -- ^ Block element
            -> Org m (Doc Text)
 blockToOrg Null = return empty
-blockToOrg (Div attr bs) = divToOrg attr bs
+blockToOrg (Div attr@(ident,_,_) bs) = do
+  opts <- gets stOptions
+  -- Strip off bibliography if citations enabled
+  if ident == "refs" && isEnabled Ext_citations opts
+     then return mempty
+     else divToOrg attr bs
 blockToOrg (Plain inlines) = inlineListToOrg inlines
--- title beginning with fig: indicates that the image is a figure
-blockToOrg (Para [Image attr txt (src,tgt)])
-  | Just tit <- T.stripPrefix "fig:" tgt = do
+blockToOrg (SimpleFigure attr txt (src, tit)) = do
       capt <- if null txt
               then return empty
               else ("#+caption: " <>) `fmap` inlineListToOrg txt
@@ -150,7 +159,7 @@ blockToOrg (CodeBlock (_,classes,kvs) str) = do
   let (beg, end) = case at of
                       []    -> ("#+begin_example" <> numberlines, "#+end_example")
                       (x:_) -> ("#+begin_src " <> x <> numberlines, "#+end_src")
-  return $ literal beg $$ nest 2 (literal str) $$ text end $$ blankline
+  return $ literal beg $$ literal str $$ text end $$ blankline
 blockToOrg (BlockQuote blocks) = do
   contents <- blockListToOrg blocks
   return $ blankline $$ "#+begin_quote" $$
@@ -163,7 +172,7 @@ blockToOrg (Table _ blkCapt specs thead tbody tfoot) =  do
                    else "#+caption: " <> caption''
   headers' <- mapM blockListToOrg headers
   rawRows <- mapM (mapM blockListToOrg) rows
-  let numChars = maximum . map offset
+  let numChars = maybe 0 maximum . nonEmpty . map offset
   -- FIXME: width is not being used.
   let widthsInChars =
        map numChars $ transpose (headers' : rawRows)
@@ -188,9 +197,7 @@ blockToOrg (Table _ blkCapt specs thead tbody tfoot) =  do
   return $ head'' $$ body $$ caption $$ blankline
 blockToOrg (BulletList items) = do
   contents <- mapM bulletListItemToOrg items
-  -- ensure that sublists have preceding blank line
-  return $ blankline $$
-           (if isTightList items then vcat else vsep) contents $$
+  return $ (if isTightList items then vcat else vsep) contents $$
            blankline
 blockToOrg (OrderedList (start, _, delim) items) = do
   let delim' = case delim of
@@ -198,13 +205,10 @@ blockToOrg (OrderedList (start, _, delim) items) = do
                     x         -> x
   let markers = take (length items) $ orderedListMarkers
                                       (start, Decimal, delim')
-  let maxMarkerLength = maximum $ map T.length markers
-  let markers' = map (\m -> let s = maxMarkerLength - T.length m
-                            in  m <> T.replicate s " ") markers
-  contents <- zipWithM orderedListItemToOrg markers' items
-  -- ensure that sublists have preceding blank line
-  return $ blankline $$
-           (if isTightList items then vcat else vsep) contents $$
+      counters = (case start of 1 -> Nothing; n -> Just n) : repeat Nothing
+  contents <- zipWithM (\x f -> f x) items $
+              zipWith orderedListItemToOrg markers counters
+  return $ (if isTightList items then vcat else vsep) contents $$
            blankline
 blockToOrg (DefinitionList items) = do
   contents <- mapM definitionListItemToOrg items
@@ -213,24 +217,51 @@ blockToOrg (DefinitionList items) = do
 -- | Convert bullet list item (list of blocks) to Org.
 bulletListItemToOrg :: PandocMonad m => [Block] -> Org m (Doc Text)
 bulletListItemToOrg items = do
-  contents <- blockListToOrg items
-  return $ hang 2 "- " contents $$
-          if endsWithPlain items
+  exts <- gets $ writerExtensions . stOptions
+  contents <- blockListToOrg (taskListItemToOrg exts items)
+  -- if list item starts with non-paragraph, it must go on
+  -- the next line:
+  let contents' = (case items of
+                    Plain{}:_ -> mempty
+                    Para{}:_ -> mempty
+                    _ -> cr) <> chomp contents
+  return $ hang 2 "- " contents' $$
+          if null items || endsWithPlain items
              then cr
              else blankline
-
 
 -- | Convert ordered list item (a list of blocks) to Org.
 orderedListItemToOrg :: PandocMonad m
                      => Text   -- ^ marker for list item
+                     -> Maybe Int -- ^ maybe number for a counter cookie
                      -> [Block]  -- ^ list item (list of blocks)
                      -> Org m (Doc Text)
-orderedListItemToOrg marker items = do
-  contents <- blockListToOrg items
-  return $ hang (T.length marker + 1) (literal marker <> space) contents $$
-          if endsWithPlain items
+orderedListItemToOrg marker counter items = do
+  exts <- gets $ writerExtensions . stOptions
+  contents <- blockListToOrg (taskListItemToOrg exts items)
+  -- if list item starts with non-paragraph, it must go on
+  -- the next line:
+  let contents' = (case items of
+                    Plain{}:_ -> mempty
+                    Para{}:_ -> mempty
+                    _ -> cr) <> chomp contents
+  let cookie = maybe empty
+               (\n -> space <> literal "[@" <> literal (tshow n) <> literal "]")
+               counter
+  return $ hang (T.length marker + 1)
+                (literal marker <> cookie <> space) contents' $$
+          if null items || endsWithPlain items
              then cr
              else blankline
+
+-- | Convert a list item containing text starting with @U+2610 BALLOT BOX@
+-- or @U+2612 BALLOT BOX WITH X@ to org checkbox syntax (e.g. @[X]@).
+taskListItemToOrg :: Extensions -> [Block] -> [Block]
+taskListItemToOrg = handleTaskListItem toOrg
+  where
+    toOrg (Str "☐" : Space : is) = Str "[ ]" : Space : is
+    toOrg (Str "☒" : Space : is) = Str "[X]" : Space : is
+    toOrg is = is
 
 -- | Convert definition list item (label, list of blocks) to Org.
 definitionListItemToOrg :: PandocMonad m
@@ -337,16 +368,20 @@ inlineListToOrg :: PandocMonad m
                 => [Inline]
                 -> Org m (Doc Text)
 inlineListToOrg lst = hcat <$> mapM inlineToOrg (fixMarkers lst)
-  where fixMarkers [] = []  -- prevent note refs and list markers from wrapping, see #4171
+  where -- Prevent note refs and list markers from wrapping, see #4171
+        -- and #7132.
+        fixMarkers [] = []
         fixMarkers (Space : x : rest) | shouldFix x =
           Str " " : x : fixMarkers rest
         fixMarkers (SoftBreak : x : rest) | shouldFix x =
           Str " " : x : fixMarkers rest
         fixMarkers (x : rest) = x : fixMarkers rest
 
-        shouldFix Note{} = True -- Prevent footnotes
+        shouldFix Note{} = True    -- Prevent footnotes
         shouldFix (Str "-") = True -- Prevent bullet list items
-        -- TODO: prevent ordered list items
+        shouldFix (Str x)          -- Prevent ordered list items
+          | Just (cs, c) <- T.unsnoc x = T.all isDigit cs &&
+                                         (c == '.' || c == ')')
         shouldFix _ = False
 
 -- | Convert Pandoc inline element to Org.
@@ -380,15 +415,45 @@ inlineToOrg (Quoted SingleQuote lst) = do
 inlineToOrg (Quoted DoubleQuote lst) = do
   contents <- inlineListToOrg lst
   return $ "\"" <> contents <> "\""
-inlineToOrg (Cite _  lst) = inlineListToOrg lst
+inlineToOrg (Cite cs lst) = do
+  opts <- gets stOptions
+  if isEnabled Ext_citations opts
+     then do
+       let renderCiteItem c = do
+             citePref <- inlineListToOrg (citationPrefix c)
+             let (locinfo, suffix) = parseLocator locmap (citationSuffix c)
+             citeSuff <- inlineListToOrg suffix
+             let locator = case locinfo of
+                            Just info -> literal $
+                              T.replace "\160" " " $
+                              T.replace "{" "" $
+                              T.replace "}" "" $ locatorRaw info
+                            Nothing -> mempty
+             return $ hsep [ citePref
+                           , ("@" <> literal (citationId c))
+                           , locator
+                           , citeSuff ]
+       citeItems <- mconcat . intersperse "; " <$> mapM renderCiteItem cs
+       let sty = case cs of
+                   (d:_)
+                     | citationMode d == AuthorInText
+                     -> literal "/t"
+                   [d]
+                     | citationMode d == SuppressAuthor
+                     -> literal "/na"
+                   _ -> mempty
+       return $ "[cite" <> sty <> ":" <> citeItems <> "]"
+     else inlineListToOrg lst
 inlineToOrg (Code _ str) = return $ "=" <> literal str <> "="
 inlineToOrg (Str str) = return . literal $ escapeString str
 inlineToOrg (Math t str) = do
   modify $ \st -> st{ stHasMath = True }
   return $ if t == InlineMath
-              then "$" <> literal str <> "$"
-              else "$$" <> literal str <> "$$"
+              then "\\(" <> literal str <> "\\)"
+              else "\\[" <> literal str <> "\\]"
 inlineToOrg il@(RawInline f str)
+  | elem f ["tex", "latex"] && T.isPrefixOf "\\begin" str =
+    return $ cr <> literal str <> cr
   | isRawFormat f = return $ literal str
   | otherwise     = do
       report $ InlineNotRendered il
@@ -441,20 +506,109 @@ pandocLangToOrg cs =
     "c"          -> "C"
     "commonlisp" -> "lisp"
     "r"          -> "R"
-    "bash"       -> "shell"
-    "lillypond"  -> "ly"
+    "bash"       -> "sh"
     _            -> cs
 
 -- | List of language identifiers recognized by org-mode.
+-- See <https://orgmode.org/manual/Languages.html>.
 orgLangIdentifiers :: [Text]
 orgLangIdentifiers =
-  [ "abc", "asymptote", "awk", "axiom", "C", "cpp", "calc", "clojure","comint"
-  , "coq", "css", "D", "ditaa", "dot", "ebnf", "elixir", "eukleides", "fomus"
-  , "forth", "F90", "gnuplot", "Translate", "groovy", "haskell" , "browser"
-  , "request", "io", "ipython", "J", "java", "js", "julia", "kotlin", "latex"
-  , "ledger", "ly", "lisp", "Flavored", "makefile", "mathematica", "mathomatic"
-  , "matlab", "max", "mongo", "mscgen", "cypher", "Caml", "octave" , "org", "oz"
-  , "perl", "picolisp", "plantuml", "processing", "prolog", "python" , "R"
-  , "rec", "ruby", "sass", "scala", "scheme", "screen", "sed", "shell", "shen"
-  , "sql", "sqlite", "stan", "ML", "stata", "tcl", "typescript", "vala"
-  ]
+  [ "asymptote"
+  , "lisp"
+  , "awk"
+  , "lua"
+  , "C"
+  , "matlab"
+  , "C++"
+  , "mscgen"
+  , "clojure"
+  , "ocaml"
+  , "css"
+  , "octave"
+  , "D"
+  , "org"
+  , "ditaa"
+  , "oz"
+  , "calc"
+  , "perl"
+  , "emacs-lisp"
+  , "plantuml"
+  , "eshell"
+  , "processing"
+  , "fortran"
+  , "python"
+  , "gnuplot"
+  , "R"
+  , "screen"
+  , "ruby"
+  , "dot"
+  , "sass"
+  , "haskell"
+  , "scheme"
+  , "java"
+  , "sed"
+  , "js"
+  , "sh"
+  , "latex"
+  , "sql"
+  , "ledger"
+  , "sqlite"
+  , "lilypond"
+  , "vala" ]
+
+-- taken from oc-csl.el in the org source tree:
+locmap :: LocatorMap
+locmap = LocatorMap $ M.fromList
+  [ ("bk."       , "book")
+  , ("bks."      , "book")
+  , ("book"      , "book")
+  , ("chap."     , "chapter")
+  , ("chaps."    , "chapter")
+  , ("chapter"   , "chapter")
+  , ("col."      , "column")
+  , ("cols."     , "column")
+  , ("column"    , "column")
+  , ("figure"    , "figure")
+  , ("fig."      , "figure")
+  , ("figs."     , "figure")
+  , ("folio"     , "folio")
+  , ("fol."      , "folio")
+  , ("fols."     , "folio")
+  , ("number"    , "number")
+  , ("no."       , "number")
+  , ("nos."      , "number")
+  , ("line"      , "line")
+  , ("l."        , "line")
+  , ("ll."       , "line")
+  , ("note"      , "note")
+  , ("n."        , "note")
+  , ("nn."       , "note")
+  , ("opus"      , "opus")
+  , ("op."       , "opus")
+  , ("opp."      , "opus")
+  , ("page"      , "page")
+  , ("p"         , "page")
+  , ("p."        , "page")
+  , ("pp."       , "page")
+  , ("paragraph" , "paragraph")
+  , ("para."     , "paragraph")
+  , ("paras."    , "paragraph")
+  , ("¶"         , "paragraph")
+  , ("¶¶"        , "paragraph")
+  , ("part"      , "part")
+  , ("pt."       , "part")
+  , ("pts."      , "part")
+  , ("§"         , "section")
+  , ("§§"        , "section")
+  , ("section"   , "section")
+  , ("sec."      , "section")
+  , ("secs."     , "section")
+  , ("sub verbo" , "sub verbo")
+  , ("s.v."      , "sub verbo")
+  , ("s.vv."     , "sub verbo")
+  , ("verse"     , "verse")
+  , ("v."        , "verse")
+  , ("vv."       , "verse")
+  , ("volume"    , "volume")
+  , ("vol."      , "volume")
+  , ("vols."     , "volume") ]

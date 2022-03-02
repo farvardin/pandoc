@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.AsciiDoc
-   Copyright   : Copyright (C) 2006-2021 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -21,7 +21,8 @@ AsciiDoc:  <http://www.methods.co.nz/asciidoc/>
 module Text.Pandoc.Writers.AsciiDoc (writeAsciiDoc, writeAsciiDoctor) where
 import Control.Monad.State.Strict
 import Data.Char (isPunctuation, isSpace)
-import Data.List (intercalate, intersperse)
+import Data.List (delete, intercalate, intersperse)
+import Data.List.NonEmpty (NonEmpty(..))
 import Data.Maybe (fromMaybe, isJust)
 import qualified Data.Set as Set
 import qualified Data.Text as T
@@ -104,8 +105,11 @@ pandocToAsciiDoc opts (Pandoc meta blocks) = do
 
 -- | Escape special characters for AsciiDoc.
 escapeString :: Text -> Text
-escapeString = escapeStringUsing escs
-  where escs = backslashEscapes "{"
+escapeString t
+  | T.any (== '{') t = T.concatMap escChar t
+  | otherwise        = t
+  where escChar '{' = "\\{"
+        escChar c   = T.singleton c
 
 -- | Ordered list start parser for use in Para below.
 olMarker :: Parser Text ParserState Char
@@ -145,9 +149,8 @@ blockToAsciiDoc opts (Div (id',"section":_,_)
 blockToAsciiDoc opts (Plain inlines) = do
   contents <- inlineListToAsciiDoc opts inlines
   return $ contents <> blankline
-blockToAsciiDoc opts (Para [Image attr alternate (src,tgt)])
+blockToAsciiDoc opts (SimpleFigure attr alternate (src, tit))
   -- image::images/logo.png[Company logo, title="blah"]
-  | Just tit <- T.stripPrefix "fig:" tgt
   = (\args -> "image::" <> args <> blankline) <$>
     imageArguments opts attr alternate src tit
 blockToAsciiDoc opts (Para inlines) = do
@@ -189,7 +192,10 @@ blockToAsciiDoc _ (CodeBlock (_,classes,_) str) = return $ flush (
      then "...." $$ literal str $$ "...."
      else attrs $$ "----" $$ literal str $$ "----")
   <> blankline
-    where attrs = "[" <> literal (T.intercalate "," ("source" : classes)) <> "]"
+    where attrs = "[" <> literal (T.intercalate "," classes') <> "]"
+          classes' = if "numberLines" `elem` classes
+                        then "source%linesnum" : delete "numberLines" classes
+                        else "source" : classes
 blockToAsciiDoc opts (BlockQuote blocks) = do
   contents <- blockListToAsciiDoc opts blocks
   let isBlock (BlockQuote _) = True
@@ -242,13 +248,13 @@ blockToAsciiDoc opts block@(Table _ blkCapt specs thead tbody tfoot) = do
              $ zipWith colspec aligns widths')
          <> text ","
          <> headerspec <> text "]"
-         
+
   -- construct cells and recurse in case of nested tables
   parentTableLevel <- gets tableNestingLevel
   let currentNestingLevel = parentTableLevel + 1
-  
+
   modify $ \st -> st{ tableNestingLevel = currentNestingLevel }
-  
+
   let separator = text (if parentTableLevel == 0
                           then "|"  -- top level separator
                           else "!") -- nested separator
@@ -274,10 +280,10 @@ blockToAsciiDoc opts block@(Table _ blkCapt specs thead tbody tfoot) = do
   let colwidth = if writerWrapText opts == WrapAuto
                     then writerColumns opts
                     else 100000
-  let maxwidth = maximum $ map offset (head':rows')
+  let maxwidth = maximum $ fmap offset (head' :| rows')
   let body = if maxwidth > colwidth then vsep rows' else vcat rows'
   let border = separator <> text "==="
-  return $ 
+  return $
     caption'' $$ tablespec $$ border $$ head'' $$ body $$ border $$ blankline
 blockToAsciiDoc opts (BulletList items) = do
   inlist <- gets inList
@@ -336,11 +342,25 @@ bulletListItemToAsciiDoc :: PandocMonad m
 bulletListItemToAsciiDoc opts blocks = do
   lev <- gets bulletListLevel
   modify $ \s -> s{ bulletListLevel = lev + 1 }
-  contents <- foldM (addBlock opts) empty blocks
+  isAsciidoctor <- gets asciidoctorVariant
+  let blocksWithTasks = if isAsciidoctor
+                          then (taskListItemToAsciiDoc blocks)
+                          else blocks
+  contents <- foldM (addBlock opts) empty blocksWithTasks
   modify $ \s -> s{ bulletListLevel = lev }
   let marker = text (replicate (lev + 1) '*')
-  return $ marker <> text " " <> listBegin blocks <>
+  return $ marker <> text " " <> listBegin blocksWithTasks <>
     contents <> cr
+
+-- | Convert a list item containing text starting with @U+2610 BALLOT BOX@
+-- or @U+2612 BALLOT BOX WITH X@ to asciidoctor checkbox syntax (e.g. @[x]@).
+taskListItemToAsciiDoc :: [Block] -> [Block]
+taskListItemToAsciiDoc = handleTaskListItem toOrg listExt
+  where
+    toOrg (Str "☐" : Space : is) = Str "[ ]" : Space : is
+    toOrg (Str "☒" : Space : is) = Str "[x]" : Space : is
+    toOrg is = is
+    listExt = extensionsFromList [Ext_task_lists]
 
 addBlock :: PandocMonad m
          => WriterOptions -> Doc Text -> Block -> ADW m (Doc Text)
@@ -448,7 +468,7 @@ inlineListToAsciiDoc opts lst = do
                                    _           -> False
        isSpacy Start (Str xs)
          | Just (c, _) <- T.uncons xs = isPunctuation c || isSpace c
-       isSpacy _ _ = False
+       isSpacy _ _ = True
 
 setIntraword :: PandocMonad m => Bool -> ADW m ()
 setIntraword b = modify $ \st -> st{ intraword = b }
@@ -495,7 +515,9 @@ inlineToAsciiDoc opts (Quoted qt lst) = do
         | otherwise     -> [Str "``"] ++ lst ++ [Str "''"]
 inlineToAsciiDoc _ (Code _ str) = do
   isAsciidoctor <- gets asciidoctorVariant
-  let contents = literal (escapeStringUsing (backslashEscapes "`") str)
+  let escChar '`' = "\\'"
+      escChar c   = T.singleton c
+  let contents = literal (T.concatMap escChar str)
   return $
     if isAsciidoctor
        then text "`+" <> contents <> "+`"
@@ -540,6 +562,7 @@ inlineToAsciiDoc opts (Link _ txt (src, _tit)) = do
 -- or my@email.com[email john]
   linktext <- inlineListToAsciiDoc opts txt
   let isRelative = T.all (/= ':') src
+  let needsPassthrough = "--" `T.isInfixOf` src
   let prefix = if isRelative
                   then text "link:"
                   else empty
@@ -547,9 +570,16 @@ inlineToAsciiDoc opts (Link _ txt (src, _tit)) = do
   let useAuto = case txt of
                       [Str s] | escapeURI s == srcSuffix -> True
                       _       -> False
-  return $ if useAuto
-              then literal srcSuffix
-              else prefix <> literal src <> "[" <> linktext <> "]"
+  return $
+    if needsPassthrough
+       then
+         if useAuto
+            then "link:++" <> literal srcSuffix <> "++[]"
+            else "link:++" <> literal src <> "++[" <> linktext <> "]"
+       else
+         if useAuto
+            then literal srcSuffix
+            else prefix <> literal src <> "[" <> linktext <> "]"
 inlineToAsciiDoc opts (Image attr alternate (src, tit)) =
   ("image:" <>) <$> imageArguments opts attr alternate src tit
 inlineToAsciiDoc opts (Note [Para inlines]) =

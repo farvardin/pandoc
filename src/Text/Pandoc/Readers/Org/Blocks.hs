@@ -1,9 +1,10 @@
 {-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
 {- |
    Module      : Text.Pandoc.Readers.Org.Blocks
-   Copyright   : Copyright (C) 2014-2021 Albert Krewinkel
+   Copyright   : Copyright (C) 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <tarleb+pandoc@moltkeplatz.de>
@@ -35,13 +36,15 @@ import Control.Monad (foldM, guard, mplus, mzero, void)
 import Data.Char (isSpace)
 import Data.Default (Default)
 import Data.Functor (($>))
-import Data.List (foldl', intersperse)
+import Data.List (foldl')
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
-
+import Data.List.NonEmpty (nonEmpty)
+import System.FilePath
 import qualified Data.Text as T
 import qualified Text.Pandoc.Builder as B
 import qualified Text.Pandoc.Walk as Walk
+import Text.Pandoc.Sources (ToSources(..))
 
 --
 -- parsing blocks
@@ -164,9 +167,8 @@ keyValues = try $
    value = skipSpaces *> manyTillChar anyChar endOfValue
 
    endOfValue :: Monad m => OrgParser m ()
-   endOfValue =
-     lookAhead $ (() <$ try (many1 spaceChar <* key))
-              <|> () <$ newline
+   endOfValue = lookAhead (void $ try (many1 spaceChar <* key))
+            <|> try (skipSpaces <* lookAhead newline)
 
 
 --
@@ -471,15 +473,16 @@ figure = try $ do
        figCaption = fromMaybe mempty $ blockAttrCaption figAttrs
        figKeyVals = blockAttrKeyValues figAttrs
        attr       = (figLabel, mempty, figKeyVals)
-       figTitle   = (if isFigure then withFigPrefix else id) figName
-     in
-       B.para . B.imageWith attr imgSrc figTitle <$> figCaption
-
-   withFigPrefix :: Text -> Text
-   withFigPrefix cs =
-     if "fig:" `T.isPrefixOf` cs
-     then cs
-     else "fig:" <> cs
+     in if isFigure
+           then (\c ->
+               B.simpleFigureWith
+                   attr c imgSrc (unstackFig figName)) <$> figCaption
+           else B.para . B.imageWith attr imgSrc figName <$> figCaption
+   unstackFig :: Text -> Text
+   unstackFig figName =
+       if "fig:" `T.isPrefixOf` figName
+           then T.drop 4 figName
+           else figName
 
 -- | Succeeds if looking at the end of the current paragraph
 endOfParagraph :: Monad m => OrgParser m ()
@@ -525,7 +528,9 @@ include = try $ do
                      _ -> nullAttr
         return $ pure . B.codeBlockWith attr <$> parseRaw
       _ -> return $ return . B.fromList . blockFilter params <$> blockList
-  insertIncludedFileF blocksParser ["."] filename
+  currentDir <- takeDirectory . sourceName <$> getPosition
+  insertIncludedFile blocksParser toSources
+                     [currentDir] filename Nothing Nothing
  where
   includeTarget :: PandocMonad m => OrgParser m FilePath
   includeTarget = do
@@ -541,8 +546,7 @@ include = try $ do
     in case (minlvl >>= safeRead :: Maybe Int) of
          Nothing -> blks
          Just lvl -> let levels = Walk.query headerLevel blks
-                         -- CAVE: partial function in else
-                         curMin = if null levels then 0 else minimum levels
+                         curMin = maybe 0 minimum $ nonEmpty levels
                      in Walk.walk (shiftHeader (curMin - lvl)) blks
 
   headerLevel :: Block -> [Int]
@@ -756,19 +760,17 @@ latexFragment = try $ do
   texOpt  <- getExportSetting exportWithLatex
   let envStart = "\\begin{" <> envName <> "}"
   let envEnd = "\\end{" <> envName <> "}"
-  envLines <- do
-    content <- manyTill anyLine (latexEnd envName)
-    return $ envStart : content ++ [envEnd]
+  envContent <- do
+    content <- manyTillChar anyChar (latexEnd envName)
+    return $ envStart <> content <> envEnd
   returnF $ case texOpt of
-    TeXExport -> B.rawBlock "latex" . T.unlines $ envLines
+    TeXExport -> B.rawBlock "latex" (envContent <> "\n")
     TeXIgnore   -> mempty
-    TeXVerbatim -> B.para . mconcat . intersperse B.softbreak $
-                   map B.str envLines
+    TeXVerbatim -> B.para . B.text $ envContent
  where
   latexEnd :: Monad m => Text -> OrgParser m ()
   latexEnd envName = try . void
-     $ skipSpaces
-    <* textStr ("\\end{" <> envName <> "}")
+     $ textStr ("\\end{" <> envName <> "}")
     <* blankline
 
 
@@ -798,7 +800,7 @@ paraOrPlain = try $ do
   -- is directly followed by a list item, in which case the block is read as
   -- plain text.
   try (guard nl
-       *> notFollowedBy (inList *> (orderedListStart <|> bulletListStart))
+       *> notFollowedBy (inList *> (void orderedListStart <|> void bulletListStart))
        $> (B.para <$> ils))
     <|>  return (B.plain <$> ils)
 
@@ -830,9 +832,12 @@ indented indentedMarker minIndent = try $ do
 
 orderedList :: PandocMonad m => OrgParser m (F Blocks)
 orderedList = try $ do
-  indent <- lookAhead orderedListStart
-  fmap (B.orderedList . compactify) . sequence
-    <$> many1 (listItem (orderedListStart `indented` indent))
+  (indent, attr) <- lookAhead orderedListStart
+  attr' <- option (fst3 attr, DefaultStyle, DefaultDelim) $
+           guardEnabled Ext_fancy_lists $> attr
+  fmap (B.orderedListWith attr' . compactify) . sequence
+    <$> many1 (listItem ((fst <$> orderedListStart) `indented` indent))
+  where fst3 (x,_,_) = x
 
 definitionListItem :: PandocMonad m
                    => OrgParser m Int
@@ -850,16 +855,55 @@ definitionListItem parseIndentedMarker = try $ do
    definitionMarker =
      spaceChar *> string "::" <* (spaceChar <|> lookAhead newline)
 
+-- | Checkbox for tasks.
+data Checkbox
+  = UncheckedBox
+  | CheckedBox
+  | SemicheckedBox
+
+-- | Parses a checkbox in a plain list.
+checkbox :: PandocMonad m
+         => OrgParser m Checkbox
+checkbox = do
+  guardEnabled Ext_task_lists
+  try (char '[' *> status <* char ']') <?> "checkbox"
+  where
+    status = choice
+      [ UncheckedBox   <$ char ' '
+      , CheckedBox     <$ char 'X'
+      , SemicheckedBox <$ char '-'
+      ]
+
+checkboxToInlines :: Checkbox -> Inline
+checkboxToInlines = B.Str . \case
+  UncheckedBox   -> "☐"
+  SemicheckedBox -> "☐"
+  CheckedBox     -> "☒"
+
 -- | parse raw text for one list item
 listItem :: PandocMonad m
          => OrgParser m Int
          -> OrgParser m (F Blocks)
 listItem parseIndentedMarker = try . withContext ListItemState $ do
   markerLength <- try parseIndentedMarker
+  box <- optionMaybe checkbox
   firstLine <- anyLineNewline
   blank <- option "" ("\n" <$ blankline)
   rest <- T.concat <$> many (listContinuation markerLength)
-  parseFromString blocks $ firstLine <> blank <> rest
+  contents <- parseFromString (do initial <- paraOrPlain <|> pure mempty
+                                  subsequent <- blocks
+                                  return $ initial <> subsequent)
+                (firstLine <> blank <> rest)
+  return (maybe id (prependInlines . checkboxToInlines) box <$> contents)
+
+-- | Prepend inlines to blocks, adding them to the first paragraph or
+-- creating a new Plain element if necessary.
+prependInlines :: Inline -> Blocks -> Blocks
+prependInlines inlns = B.fromList . prepend . B.toList
+  where
+    prepend (Plain is : bs) = Plain (inlns : Space : is) : bs
+    prepend (Para  is : bs) = Para  (inlns : Space : is) : bs
+    prepend bs              = Plain [inlns, Space] : bs
 
 -- continuation of a list item - indented and separated by blankline or endline.
 -- Note: nested lists are parsed as continuations.

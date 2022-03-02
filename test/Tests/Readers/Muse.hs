@@ -1,4 +1,3 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Muse
@@ -13,12 +12,12 @@ Tests for the Muse reader.
 -}
 module Tests.Readers.Muse (tests) where
 
-import Prelude
 import Data.List (intersperse)
 import Data.Monoid (Any (..))
 import Data.Text (Text)
 import qualified Data.Text as T
 import Test.Tasty
+import Test.Tasty.HUnit (HasCallStack)
 import Test.Tasty.QuickCheck
 import Test.Tasty.Options (IsOption(defaultValue))
 import Tests.Helpers
@@ -35,7 +34,7 @@ emacsMuse :: Text -> Pandoc
 emacsMuse = purely $ readMuse def { readerExtensions = emptyExtensions }
 
 infix 4 =:
-(=:) :: ToString c
+(=:) :: (ToString c, HasCallStack)
      => String -> (Text, c) -> TestTree
 (=:) = test amuse
 

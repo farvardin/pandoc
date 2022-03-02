@@ -2,7 +2,7 @@
 {-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Ms
-   Copyright   : Copyright (C) 2007-2021 John MacFarlane
+   Copyright   : Copyright (C) 2007-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -21,8 +21,9 @@ TODO:
 
 module Text.Pandoc.Writers.Ms ( writeMs ) where
 import Control.Monad.State.Strict
-import Data.Char (isLower, isUpper, ord)
+import Data.Char (isAscii, isLower, isUpper, ord)
 import Data.List (intercalate, intersperse)
+import Data.List.NonEmpty (nonEmpty)
 import qualified Data.Map as Map
 import Data.Maybe (catMaybes)
 import Data.Text (Text)
@@ -45,6 +46,8 @@ import Text.Pandoc.Writers.Shared
 import Text.Pandoc.Writers.Roff
 import Text.Printf (printf)
 import Text.TeXMath (writeEqn)
+import qualified Data.Text.Encoding as TE
+import qualified Data.ByteString as B
 
 -- | Convert Pandoc to Ms.
 writeMs :: PandocMonad m => WriterOptions -> Pandoc -> m Text
@@ -86,6 +89,21 @@ pandocToMs opts (Pandoc meta blocks) = do
 escapeStr :: WriterOptions -> Text -> Text
 escapeStr opts =
   escapeString (if writerPreferAscii opts then AsciiOnly else AllowUTF8)
+
+-- In PDFs we need to escape parentheses and backslash.
+-- In PDF we need to encode as UTF-16 BE.
+escapePDFString :: Text -> Text
+escapePDFString t
+  | T.all isAscii t =
+    T.replace "(" "\\(" .  T.replace ")" "\\)" . T.replace "\\" "\\\\" $ t
+  | otherwise = ("\\376\\377" <>) .  -- add bom
+    mconcat . map encodeChar .  T.unpack $ t
+ where
+  encodeChar c =
+    if isAscii c && c /= '\\' && c /= '(' && c /= ')'
+       then "\\000" <> T.singleton c
+       else mconcat . map toOctal . B.unpack . TE.encodeUtf16BE $ T.singleton c
+  toOctal n = "\\" <> T.pack (printf "%03o" n)
 
 escapeUri :: Text -> Text
 escapeUri = T.pack . escapeURIString (\c -> c /= '@' && isAllowedInURI c) . T.unpack
@@ -142,7 +160,7 @@ blockToMs opts (Div (ident,cls,kvs) bs) = do
        setFirstPara
        return $ anchor $$ res
 blockToMs opts (Plain inlines) =
-  liftM vcat $ mapM (inlineListToMs' opts) $ splitSentences inlines
+  splitSentences <$> inlineListToMs' opts inlines
 blockToMs opts (Para [Image attr alt (src,_tit)])
   | let ext = takeExtension (T.unpack src) in (ext == ".ps" || ext == ".eps") = do
   let (mbW,mbH) = (inPoints opts <$> dimension Width attr,
@@ -155,7 +173,7 @@ blockToMs opts (Para [Image attr alt (src,_tit)])
                               space <>
                               doubleQuotes (literal (tshow (floor hp :: Int)))
                        _ -> empty
-  capt <- inlineListToMs' opts alt
+  capt <- splitSentences <$> inlineListToMs' opts alt
   return $ nowrap (literal ".PSPIC -C " <>
              doubleQuotes (literal (escapeStr opts src)) <>
              sizeAttrs) $$
@@ -165,9 +183,9 @@ blockToMs opts (Para [Image attr alt (src,_tit)])
 blockToMs opts (Para inlines) = do
   firstPara <- gets stFirstPara
   resetFirstPara
-  contents <- liftM vcat $ mapM (inlineListToMs' opts) $
-    splitSentences inlines
-  return $ literal (if firstPara then ".LP" else ".PP") $$ contents
+  contents <- inlineListToMs' opts inlines
+  return $ literal (if firstPara then ".LP" else ".PP") $$
+           splitSentences contents
 blockToMs _ b@(RawBlock f str)
   | f == Format "ms" = return $ literal str
   | otherwise        = do
@@ -195,7 +213,7 @@ blockToMs opts (Header level (ident,classes,_) inlines) = do
                                       (if T.null secnum
                                           then ""
                                           else "  ") <>
-                                      escapeStr opts (stringify inlines))
+                                      escapePDFString (stringify inlines))
   let backlink = nowrap (literal ".pdfhref L -D " <>
        doubleQuotes (literal (toAscii ident)) <> space <> literal "\\") <> cr <>
        literal " -- "
@@ -244,13 +262,17 @@ blockToMs opts (Table _ blkCapt specs thead tbody tfoot) =
       aligncode AlignDefault = "l"
   in do
   caption' <- inlineListToMs' opts caption
-  let iwidths = if all (== 0) widths
-                   then repeat ""
-                   else map (T.pack . printf "w(%0.1fn)" . (70 *)) widths
+  let isSimple = all (== 0) widths
+  let totalWidth = 70
   -- 78n default width - 8n indent = 70n
   let coldescriptions = literal $ T.unwords
-                        (zipWith (\align width -> aligncode align <> width)
-                        alignments iwidths) <> "."
+                        (zipWith (\align width -> aligncode align <>
+                                    if width == 0
+                                       then ""
+                                       else T.pack $
+                                              printf "w(%0.1fn)"
+                                              (totalWidth * width))
+                        alignments widths) <> "."
   colheadings <- mapM (blockListToMs opts) headers
   let makeRow cols = literal "T{" $$
                      vcat (intersperse (literal "T}\tT{") cols) $$
@@ -259,13 +281,25 @@ blockToMs opts (Table _ blkCapt specs thead tbody tfoot) =
                         then empty
                         else makeRow colheadings $$ char '_'
   body <- mapM (\row -> do
-                         cols <- mapM (blockListToMs opts) row
+                         cols <- mapM (\(cell, w) ->
+                                   (if isSimple
+                                       then id
+                                       else (literal (".nr LL " <>
+                                              T.pack (printf "%0.1fn"
+                                                (w * totalWidth))) $$)) <$>
+                                   blockListToMs opts cell) (zip row widths)
                          return $ makeRow cols) rows
   setFirstPara
   return $ literal ".PP" $$ caption' $$
            literal ".na" $$ -- we don't want justification in table cells
+           (if isSimple
+               then ""
+               else ".nr LLold \\n[LL]") $$
            literal ".TS" $$ literal "delim(@@) tab(\t);" $$ coldescriptions $$
            colheadings' $$ vcat body $$ literal ".TE" $$
+           (if isSimple
+               then ""
+               else ".nr LL \\n[LLold]") $$
            literal ".ad"
 
 blockToMs opts (BulletList items) = do
@@ -274,8 +308,7 @@ blockToMs opts (BulletList items) = do
   return (vcat contents)
 blockToMs opts (OrderedList attribs items) = do
   let markers = take (length items) $ orderedListMarkers attribs
-  let indent = 2 +
-                     maximum (map T.length markers)
+  let indent = 2 + maybe 0 maximum (nonEmpty (map T.length markers))
   contents <- mapM (\(num, item) -> orderedListItemToMs opts num indent item) $
               zip markers items
   setFirstPara

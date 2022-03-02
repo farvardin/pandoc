@@ -1,9 +1,8 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE PatternGuards     #-}
-{-# LANGUAGE ViewPatterns      #-}
 {- |
    Module      : Text.Pandoc.Writers.Docbook
-   Copyright   : Copyright (C) 2006-2021 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -95,7 +94,8 @@ writeDocbook5 opts d =
 
 -- | Convert Pandoc document to string in Docbook format.
 writeDocbook :: PandocMonad m => WriterOptions -> Pandoc -> DB m Text
-writeDocbook opts (Pandoc meta blocks) = do
+writeDocbook opts doc = do
+  let Pandoc meta blocks = ensureValidXmlIdentifiers doc
   let colwidth = if writerWrapText opts == WrapAuto
                     then Just $ writerColumns opts
                     else Nothing
@@ -168,7 +168,7 @@ blockToDocbook :: PandocMonad m => WriterOptions -> Block -> DB m (Doc Text)
 blockToDocbook _ Null = return empty
 -- Add ids to paragraphs in divs with ids - this is needed for
 -- pandoc-citeproc to get link anchors in bibliographies:
-blockToDocbook opts (Div (id',"section":_,_) (Header lvl _ ils : xs)) = do
+blockToDocbook opts (Div (id',"section":_,_) (Header lvl (_,_,attrs) ils : xs)) = do
   version <- ask
   -- Docbook doesn't allow sections with no content, so insert some if needed
   let bs = if null xs
@@ -188,15 +188,17 @@ blockToDocbook opts (Div (id',"section":_,_) (Header lvl _ ils : xs)) = do
       -- standalone documents will include them in the template.
                  then [("xmlns", "http://docbook.org/ns/docbook"),("xmlns:xlink", "http://www.w3.org/1999/xlink")]
                  else []
-      attribs = nsAttr <> idAttr
+
+      -- Populate miscAttr with Header.Attr.attributes, filtering out non-valid DocBook section attributes, id, and xml:id
+      miscAttr = filter (isSectionAttr version) attrs
+      attribs = nsAttr <> idAttr <> miscAttr
   title' <- inlinesToDocbook opts ils
   contents <- blocksToDocbook opts bs
   return $ inTags True tag attribs $ inTagsSimple "title" title' $$ contents
 blockToDocbook opts (Div (ident,classes,_) bs) = do
   version <- ask
   let identAttribs = [(idName version, ident) | not (T.null ident)]
-      admonitions = ["attention","caution","danger","error","hint",
-                     "important","note","tip","warning"]
+      admonitions = ["caution","danger","important","note","tip","warning"]
   case classes of
     (l:_) | l `elem` admonitions -> do
         let (mTitleBs, bodyBs) =
@@ -231,7 +233,7 @@ blockToDocbook _ h@Header{} = do
   return empty
 blockToDocbook opts (Plain lst) = inlinesToDocbook opts lst
 -- title beginning with fig: indicates that the image is a figure
-blockToDocbook opts (Para [Image attr txt (src,T.stripPrefix "fig:" -> Just _)]) = do
+blockToDocbook opts (SimpleFigure attr txt (src, _)) = do
   alt <- inlinesToDocbook opts txt
   let capt = if null txt
                 then empty
@@ -250,17 +252,18 @@ blockToDocbook opts (LineBlock lns) =
   blockToDocbook opts $ linesToPara lns
 blockToDocbook opts (BlockQuote blocks) =
   inTagsIndented "blockquote" <$> blocksToDocbook opts blocks
-blockToDocbook _ (CodeBlock (_,classes,_) str) = return $
+blockToDocbook opts (CodeBlock (_,classes,_) str) = return $
   literal ("<programlisting" <> lang <> ">") <> cr <>
      flush (literal (escapeStringForXML str) <> cr <> literal "</programlisting>")
     where lang  = if null langs
                      then ""
                      else " language=\"" <> escapeStringForXML (head langs) <>
                           "\""
-          isLang l    = T.toLower l `elem` map T.toLower languages
+          syntaxMap = writerSyntaxMap opts
+          isLang l    = T.toLower l `elem` map T.toLower (languages syntaxMap)
           langsFrom s = if isLang s
                            then [s]
-                           else languagesByExtension . T.toLower $ s
+                           else (languagesByExtension syntaxMap) . T.toLower $ s
           langs       = concatMap langsFrom classes
 blockToDocbook opts (BulletList lst) = do
   let attribs = [("spacing", "compact") | isTightList lst]
@@ -427,7 +430,9 @@ inlineToDocbook opts (Link attr txt (src, _))
   | otherwise = do
       version <- ask
       (if "#" `T.isPrefixOf` src
-            then inTags False "link" $ ("linkend", writerIdentifierPrefix opts <> T.drop 1 src) : idAndRole attr
+            then let tag = if null txt then "xref" else "link"
+                 in  inTags False tag $
+                     ("linkend", writerIdentifierPrefix opts <> T.drop 1 src) : idAndRole attr
             else if version == DocBook5
                     then inTags False "link" $ ("xlink:href", src) : idAndRole attr
                     else inTags False "ulink" $ ("url", src) : idAndRole attr )
@@ -451,3 +456,43 @@ idAndRole (id',cls,_) = ident <> role
   where
     ident = [("id", id') | not (T.null id')]
     role  = [("role", T.unwords cls) | not (null cls)]
+
+isSectionAttr :: DocBookVersion -> (Text, Text) -> Bool
+isSectionAttr _ ("label",_) = True
+isSectionAttr _ ("status",_) = True
+isSectionAttr DocBook5 ("annotations",_) = True
+isSectionAttr DocBook5 ("dir","ltr") = True
+isSectionAttr DocBook5 ("dir","rtl") = True
+isSectionAttr DocBook5 ("dir","lro") = True
+isSectionAttr DocBook5 ("dir","rlo") = True
+isSectionAttr _ ("remap",_) = True
+isSectionAttr _ ("revisionflag","changed") = True
+isSectionAttr _ ("revisionflag","added") = True
+isSectionAttr _ ("revisionflag","deleted") = True
+isSectionAttr _ ("revisionflag","off") = True
+isSectionAttr _ ("role",_) = True
+isSectionAttr DocBook5 ("version",_) = True
+isSectionAttr DocBook5 ("xml:base",_) = True
+isSectionAttr DocBook5 ("xml:lang",_) = True
+isSectionAttr _ ("xreflabel",_) = True
+isSectionAttr DocBook5 ("linkend",_) = True
+isSectionAttr DocBook5 ("linkends",_) = True
+isSectionAttr DocBook5 ("xlink:actuate",_) = True
+isSectionAttr DocBook5 ("xlink:arcrole",_) = True
+isSectionAttr DocBook5 ("xlink:from",_) = True
+isSectionAttr DocBook5 ("xlink:href",_) = True
+isSectionAttr DocBook5 ("xlink:label",_) = True
+isSectionAttr DocBook5 ("xlink:role",_) = True
+isSectionAttr DocBook5 ("xlink:show",_) = True
+isSectionAttr DocBook5 ("xlink:title",_) = True
+isSectionAttr DocBook5 ("xlink:to",_) = True
+isSectionAttr DocBook5 ("xlink:type",_) = True
+isSectionAttr DocBook4 ("arch",_) = True
+isSectionAttr DocBook4 ("condition",_) = True
+isSectionAttr DocBook4 ("conformance",_) = True
+isSectionAttr DocBook4 ("lang",_) = True
+isSectionAttr DocBook4 ("os",_) = True
+isSectionAttr DocBook4 ("revision",_) = True
+isSectionAttr DocBook4 ("security",_) = True
+isSectionAttr DocBook4 ("vendor",_) = True
+isSectionAttr _ (_,_) = False

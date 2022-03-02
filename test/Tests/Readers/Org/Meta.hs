@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Meta
-   Copyright   : © 2014-2021 Albert Krewinkel
+   Copyright   : © 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -13,7 +12,6 @@ Tests parsing of org meta data (mostly lines starting with @#+@).
 -}
 module Tests.Readers.Org.Meta (tests) where
 
-import Prelude
 import Test.Tasty (TestTree, testGroup)
 import Tests.Helpers ((=?>))
 import Tests.Readers.Org.Shared ((=:), spcSep)
@@ -240,7 +238,7 @@ tests =
                 , "  :setting: foo"
                 , "  :END:"
                 ] =?>
-      (mempty::Blocks)
+      (setMeta "setting" ("foo" :: T.Text) (doc mempty))
 
   , "Logbook drawer" =:
       T.unlines [ "  :LogBook:"

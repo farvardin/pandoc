@@ -3,7 +3,7 @@
 {-# OPTIONS_GHC -fno-warn-type-defaults #-}
 {- |
 Module      : Text.Pandoc.ImageSize
-Copyright   : Copyright (C) 2011-2021 John MacFarlane
+Copyright   : Copyright (C) 2011-2022 John MacFarlane
 License     : GNU GPL, version 2 or above
 
 Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -44,8 +44,9 @@ import Numeric (showFFloat)
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import qualified Text.Pandoc.UTF8 as UTF8
-import qualified Text.XML.Light as Xml
+import Text.Pandoc.XML.Light hiding (Attr)
 import qualified Data.Text as T
+import qualified Data.Text.Lazy as TL
 import qualified Data.Text.Encoding as TE
 import Control.Applicative
 import qualified Data.Attoparsec.ByteString.Char8 as A
@@ -56,7 +57,8 @@ import Codec.Picture (decodeImageWithMetadata)
 -- quick and dirty functions to get image sizes
 -- algorithms borrowed from wwwis.pl
 
-data ImageType = Png | Gif | Jpeg | Svg | Pdf | Eps | Emf deriving Show
+data ImageType = Png | Gif | Jpeg | Svg | Pdf | Eps | Emf | Tiff
+                 deriving Show
 data Direction = Width | Height
 instance Show Direction where
   show Width  = "width"
@@ -99,6 +101,8 @@ imageType :: ByteString -> Maybe ImageType
 imageType img = case B.take 4 img of
                      "\x89\x50\x4e\x47" -> return Png
                      "\x47\x49\x46\x38" -> return Gif
+                     "\x49\x49\x2a\x00" -> return Tiff
+                     "\x4D\x4D\x00\x2a" -> return Tiff
                      "\xff\xd8\xff\xe0" -> return Jpeg  -- JFIF
                      "\xff\xd8\xff\xe1" -> return Jpeg  -- Exif
                      "%PDF"             -> return Pdf
@@ -123,6 +127,7 @@ imageSize opts img = checkDpi <$>
        Just Png  -> getSize img
        Just Gif  -> getSize img
        Just Jpeg -> getSize img
+       Just Tiff -> getSize img
        Just Svg  -> mbToEither "could not determine SVG size" $ svgSize opts img
        Just Eps  -> mbToEither "could not determine EPS size" $ epsSize img
        Just Pdf  -> mbToEither "could not determine PDF size" $ pdfSize img
@@ -327,13 +332,18 @@ getSize img =
 
 svgSize :: WriterOptions -> ByteString -> Maybe ImageSize
 svgSize opts img = do
-  doc <- Xml.parseXMLDoc $ UTF8.toString img
+  doc <- either (const mzero) return $ parseXMLElement
+                                     $ TL.fromStrict $ UTF8.toText img
+  let viewboxSize = do
+        vb <- findAttrBy (== QName "viewBox" Nothing Nothing) doc
+        [_,_,w,h] <- mapM safeRead (T.words vb)
+        return (w,h)
   let dpi = fromIntegral $ writerDpi opts
   let dirToInt dir = do
-        dim <- Xml.findAttrBy (== Xml.QName dir Nothing Nothing) doc >>= lengthToDim . T.pack
+        dim <- findAttrBy (== QName dir Nothing Nothing) doc >>= lengthToDim
         return $ inPixel opts dim
-  w <- dirToInt "width"
-  h <- dirToInt "height"
+  w <- dirToInt "width" <|> (fst <$> viewboxSize)
+  h <- dirToInt "height" <|> (snd <$> viewboxSize)
   return ImageSize {
     pxX  = w
   , pxY  = h

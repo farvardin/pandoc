@@ -2,11 +2,16 @@
 {-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Text.Pandoc.Citeproc.Locator
-  ( parseLocator )
+  ( parseLocator
+  , toLocatorMap
+  , LocatorInfo(..)
+  , LocatorMap(..) )
 where
 import Citeproc.Types
+import Text.Pandoc.Citeproc.Util (splitStrWhen)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.List (foldl')
 import Text.Parsec
 import Text.Pandoc.Definition
 import Text.Pandoc.Parsing (romanNumeral)
@@ -15,11 +20,19 @@ import Control.Monad (mzero)
 import qualified Data.Map as M
 import Data.Char (isSpace, isPunctuation, isDigit)
 
-parseLocator :: Locale -> [Inline] -> (Maybe (Text, Text), [Inline])
-parseLocator locale inp =
-  case parse (pLocatorWords (toLocatorMap locale)) "suffix" $ splitInp inp of
+
+data LocatorInfo =
+  LocatorInfo{ locatorRaw :: Text
+             , locatorLabel :: Text
+             , locatorLoc :: Text
+             }
+  deriving (Show)
+
+parseLocator :: LocatorMap -> [Inline] -> (Maybe LocatorInfo, [Inline])
+parseLocator locmap inp =
+  case parse (pLocatorWords locmap) "suffix" $ splitInp inp of
        Right r -> r
-       Left _  -> (Nothing, inp)
+       Left _  -> (Nothing, maybeAddComma inp)
 
 splitInp :: [Inline] -> [Inline]
 splitInp = splitStrWhen (\c -> isSpace c || (isPunctuation c && c /= ':'))
@@ -31,41 +44,49 @@ splitInp = splitStrWhen (\c -> isSpace c || (isPunctuation c && c /= ':'))
 type LocatorParser = Parsec [Inline] ()
 
 pLocatorWords :: LocatorMap
-              -> LocatorParser (Maybe (Text, Text), [Inline])
+              -> LocatorParser (Maybe LocatorInfo, [Inline])
 pLocatorWords locMap = do
   optional $ pMatchChar "," (== ',')
   optional pSpace
-  (la, lo) <- pLocatorDelimited locMap <|> pLocatorIntegrated locMap
+  info <- pLocatorDelimited locMap <|> pLocatorIntegrated locMap
   s <- getInput -- rest is suffix
-  -- need to trim, otherwise "p. 9" and "9" will have 'different' locators later on
-  -- i.e. the first one will be " 9"
   return $
-    if T.null la && T.null lo
-       then (Nothing, s)
-       else (Just (la, T.strip lo), s)
+    if T.null (locatorLabel info) && T.null (locatorLoc info)
+       then (Nothing, maybeAddComma s)
+       else (Just info, s)
 
-pLocatorDelimited :: LocatorMap -> LocatorParser (Text, Text)
+maybeAddComma :: [Inline] -> [Inline]
+maybeAddComma [] = []
+maybeAddComma ils@(Space : _) = ils
+maybeAddComma ils@(Str t : _)
+  | Just (c, _) <- T.uncons t
+  , isPunctuation c = ils
+maybeAddComma ils = Str "," : Space : ils
+
+pLocatorDelimited :: LocatorMap -> LocatorParser LocatorInfo
 pLocatorDelimited locMap = try $ do
   _ <- pMatchChar "{" (== '{')
   skipMany pSpace -- gobble pre-spaces so label doesn't try to include them
-  (la, _) <- pLocatorLabelDelimited locMap
+  (rawlab, la, _) <- pLocatorLabelDelimited locMap
   -- we only care about balancing {} and [] (because of the outer [] scope);
   -- the rest can be anything
   let inner = do { t <- anyToken; return (True, stringify t) }
   gs <- many (pBalancedBraces [('{','}'), ('[',']')] inner)
   _ <- pMatchChar "}" (== '}')
   let lo = T.concat $ map snd gs
-  return (la, lo)
+  return $ LocatorInfo{ locatorLoc = lo,
+                        locatorLabel = la,
+                        locatorRaw = rawlab <> "{" <> lo <> "}" }
 
-pLocatorLabelDelimited :: LocatorMap -> LocatorParser (Text, Bool)
+pLocatorLabelDelimited :: LocatorMap -> LocatorParser (Text, Text, Bool)
 pLocatorLabelDelimited locMap
-  = pLocatorLabel' locMap lim <|> return ("page", True)
+  = pLocatorLabel' locMap lim <|> return ("", "page", True)
     where
         lim = stringify <$> anyToken
 
-pLocatorIntegrated :: LocatorMap -> LocatorParser (Text, Text)
+pLocatorIntegrated :: LocatorMap -> LocatorParser LocatorInfo
 pLocatorIntegrated locMap = try $ do
-  (la, wasImplicit) <- pLocatorLabelIntegrated locMap
+  (rawlab, la, wasImplicit) <- pLocatorLabelIntegrated locMap
   -- if we got the label implicitly, we have presupposed the first one is
   -- going to have a digit, so guarantee that. You _can_ have p. (a)
   -- because you specified it.
@@ -75,17 +96,20 @@ pLocatorIntegrated locMap = try $ do
   g <- try $ pLocatorWordIntegrated (not wasImplicit) >>= modifier
   gs <- many (try $ pLocatorWordIntegrated False >>= modifier)
   let lo = T.concat (g:gs)
-  return (la, lo)
+  return $ LocatorInfo{ locatorLabel = la,
+                        locatorLoc = lo,
+                        locatorRaw = rawlab <> lo }
 
-pLocatorLabelIntegrated :: LocatorMap -> LocatorParser (Text, Bool)
+pLocatorLabelIntegrated :: LocatorMap -> LocatorParser (Text, Text, Bool)
 pLocatorLabelIntegrated locMap
-  = pLocatorLabel' locMap lim <|> (lookAhead digital >> return ("page", True))
+  = pLocatorLabel' locMap lim <|>
+     (lookAhead digital >> return ("", "page", True))
     where
       lim = try $ pLocatorWordIntegrated True >>= requireRomansOrDigits
       digital = try $ pLocatorWordIntegrated True >>= requireDigits
 
 pLocatorLabel' :: LocatorMap -> LocatorParser Text
-               -> LocatorParser (Text, Bool)
+               -> LocatorParser (Text, Text, Bool)
 pLocatorLabel' locMap lim = go ""
     where
       -- grow the match string until we hit the end
@@ -96,9 +120,9 @@ pLocatorLabel' locMap lim = go ""
           t <- anyToken
           ts <- manyTill anyToken (try $ lookAhead lim)
           let s = acc <> stringify (t:ts)
-          case M.lookup (T.strip s) locMap of
+          case M.lookup (T.toCaseFold $ T.strip s) (unLocatorMap locMap) of
             -- try to find a longer one, or return this one
-            Just l -> go s <|> return (l, False)
+            Just l -> go s <|> return (s, l, False)
             Nothing -> go s
 
 -- hard requirement for a locator to have some real digits in it
@@ -139,7 +163,7 @@ pBalancedBraces braces p = try $ do
   where
       except = notFollowedBy pBraces >> p
       -- outer and inner
-      surround = foldl (\a (open, close) -> sur open close except <|> a)
+      surround = foldl' (\a (open, close) -> sur open close except <|> a)
                        except
                        braces
 
@@ -180,6 +204,7 @@ pPageUnit = roman <|> plainUnit
       plainUnit = do
           ts <- many1 (notFollowedBy pSpace >>
                        notFollowedBy pLocatorPunct >>
+                       notFollowedBy pMath >>
                        anyToken)
           let s = stringify ts
           -- otherwise look for actual digits or -s
@@ -210,6 +235,12 @@ pMatchChar msg f = satisfyTok f' <?> msg
 pSpace :: LocatorParser Inline
 pSpace = satisfyTok (\t -> isSpacey t || t == Str "\160") <?> "space"
 
+pMath :: LocatorParser Inline
+pMath = satisfyTok isMath
+ where
+  isMath (Math{}) = True
+  isMath _ = False
+
 satisfyTok :: (Inline -> Bool) -> LocatorParser Inline
 satisfyTok f = tokenPrim show (\sp _ _ -> sp) (\tok -> if f tok
                                                           then Just tok
@@ -231,32 +262,23 @@ isLocatorSep ',' = True
 isLocatorSep ';' = True
 isLocatorSep _   = False
 
-splitStrWhen :: (Char -> Bool) -> [Inline] -> [Inline]
-splitStrWhen _ [] = []
-splitStrWhen p (Str xs : ys) = go (T.unpack xs) ++ splitStrWhen p ys
-  where
-   go [] = []
-   go s = case break p s of
-             ([],[])     -> []
-             (zs,[])     -> [Str $ T.pack zs]
-             ([],w:ws) -> Str (T.singleton w) : go ws
-             (zs,w:ws) -> Str (T.pack zs) : Str (T.singleton w) : go ws
-splitStrWhen p (x : ys) = x : splitStrWhen p ys
-
 --
 -- Locator Map
 --
 
-type LocatorMap = M.Map Text Text
+newtype LocatorMap = LocatorMap { unLocatorMap :: M.Map Text Text }
+  deriving (Show)
 
 toLocatorMap :: Locale -> LocatorMap
 toLocatorMap locale =
-  foldr go mempty locatorTerms
+  LocatorMap $ foldr go mempty locatorTerms
  where
   go tname locmap =
     case M.lookup tname (localeTerms locale) of
       Nothing -> locmap
-      Just ts -> foldr (\x -> M.insert (snd x) tname) locmap ts
+      Just ts -> foldr (\x -> M.insert (T.toCaseFold $ snd x) tname) locmap ts
+-- we store keys in "case-folded" (lowercase) form, so that both
+-- "Chap." and "chap." will match, for example.
 
 locatorTerms :: [Text]
 locatorTerms =

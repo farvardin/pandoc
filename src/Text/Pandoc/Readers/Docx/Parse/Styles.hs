@@ -21,6 +21,7 @@ module Text.Pandoc.Readers.Docx.Parse.Styles (
   , CharStyle
   , ParaStyleId(..)
   , ParStyle(..)
+  , ParIndentation(..)
   , RunStyle(..)
   , HasStyleName
   , StyleName
@@ -37,6 +38,7 @@ module Text.Pandoc.Readers.Docx.Parse.Styles (
   , fromStyleName
   , fromStyleId
   , stringToInteger
+  , getIndentation
   , getNumInfo
   , elemToRunStyle
   , defaultRunStyle
@@ -48,11 +50,13 @@ import Data.Function (on)
 import Data.String (IsString(..))
 import qualified Data.Map as M
 import qualified Data.Text as T
+import qualified Data.Text.Read
+import Data.Text (Text)
 import Data.Maybe
 import Data.Coerce
 import Text.Pandoc.Readers.Docx.Util
 import qualified Text.Pandoc.UTF8 as UTF8
-import Text.XML.Light
+import Text.Pandoc.XML.Light
 
 newtype CharStyleId   = CharStyleId T.Text
   deriving (Show, Eq, Ord, IsString, FromStyleId)
@@ -108,12 +112,18 @@ data RunStyle = RunStyle { isBold       :: Maybe Bool
                          , isRTL        :: Maybe Bool
                          , isForceCTL   :: Maybe Bool
                          , rVertAlign   :: Maybe VertAlign
-                         , rUnderline   :: Maybe String
+                         , rUnderline   :: Maybe Text
                          , rParentStyle :: Maybe CharStyle
                          }
                 deriving Show
 
+data ParIndentation = ParIndentation { leftParIndent    :: Maybe Integer
+                                     , rightParIndent   :: Maybe Integer
+                                     , hangingParIndent :: Maybe Integer}
+                      deriving Show
+
 data ParStyle = ParStyle { headingLev    :: Maybe (ParaStyleName, Int)
+                         , indent        :: Maybe ParIndentation
                          , numInfo       :: Maybe (T.Text, T.Text)
                          , psParentStyle :: Maybe ParStyle
                          , pStyleName    :: ParaStyleName
@@ -135,19 +145,22 @@ defaultRunStyle = RunStyle { isBold = Nothing
                            , rParentStyle = Nothing
                            }
 
-archiveToStyles' :: (Ord k1, Ord k2, ElemToStyle a1, ElemToStyle a2) =>
-                    (a1 -> k1) -> (a2 -> k2) -> Archive -> (M.Map k1 a1, M.Map k2 a2)
+archiveToStyles'
+  :: (Ord k1, Ord k2, ElemToStyle a1, ElemToStyle a2)
+  => (a1 -> k1) -> (a2 -> k2) -> Archive -> (M.Map k1 a1, M.Map k2 a2)
 archiveToStyles' conv1 conv2 zf =
-  let stylesElem = findEntryByPath "word/styles.xml" zf >>=
-                   (parseXMLDoc . UTF8.toStringLazy . fromEntry)
-  in
-   case stylesElem of
-     Nothing -> (M.empty, M.empty)
-     Just styElem ->
-       let namespaces = elemToNameSpaces styElem
-       in
-        ( M.fromList $ map (\r -> (conv1 r, r)) $ buildBasedOnList namespaces styElem Nothing,
-          M.fromList $ map (\p -> (conv2 p, p)) $ buildBasedOnList namespaces styElem Nothing)
+  case findEntryByPath "word/styles.xml" zf of
+    Nothing -> (M.empty, M.empty)
+    Just entry ->
+      case parseXMLElement . UTF8.toTextLazy . fromEntry $ entry of
+        Left _ -> (M.empty, M.empty)
+        Right styElem ->
+          let namespaces = elemToNameSpaces styElem
+          in
+           ( M.fromList $ map (\r -> (conv1 r, r)) $
+               buildBasedOnList namespaces styElem Nothing,
+             M.fromList $ map (\p -> (conv2 p, p)) $
+               buildBasedOnList namespaces styElem Nothing)
 
 isBasedOnStyle :: (ElemToStyle a, FromStyleId (StyleId a)) => NameSpaces -> Element -> Maybe a -> Bool
 isBasedOnStyle ns element parentStyle
@@ -155,7 +168,7 @@ isBasedOnStyle ns element parentStyle
   , Just styleType <- findAttrByName ns "w" "type" element
   , styleType == cStyleType parentStyle
   , Just basedOnVal <- findChildByName ns "w" "basedOn" element >>=
-                       findAttrTextByName ns "w" "val"
+                       findAttrByName ns "w" "val"
   , Just ps <- parentStyle = basedOnVal == fromStyleId (getStyleId ps)
   | isElem ns "w" "style" element
   , Just styleType <- findAttrByName ns "w" "type" element
@@ -165,7 +178,7 @@ isBasedOnStyle ns element parentStyle
   | otherwise = False
 
 class HasStyleId a => ElemToStyle a where
-  cStyleType  :: Maybe a -> String
+  cStyleType  :: Maybe a -> Text
   elemToStyle :: NameSpaces -> Element -> Maybe a -> Maybe a
 
 class FromStyleId (StyleId a) => HasStyleId a where
@@ -222,8 +235,10 @@ buildBasedOnList ns element rootStyle =
     stys -> stys ++
             concatMap (buildBasedOnList ns element . Just) stys
 
-stringToInteger :: String -> Maybe Integer
-stringToInteger s = listToMaybe $ map fst (reads s :: [(Integer, String)])
+stringToInteger :: Text -> Maybe Integer
+stringToInteger s = case Data.Text.Read.decimal s of
+                      Right (x,_) -> Just x
+                      Left _      -> Nothing
 
 checkOnOff :: NameSpaces -> Element -> QName -> Maybe Bool
 checkOnOff ns rPr tag
@@ -243,7 +258,7 @@ checkOnOff _ _ _ = Nothing
 elemToCharStyle :: NameSpaces
                 -> Element -> Maybe CharStyle -> Maybe CharStyle
 elemToCharStyle ns element parentStyle
-  = CharStyle <$> (CharStyleId <$> findAttrTextByName ns "w" "styleId" element)
+  = CharStyle <$> (CharStyleId <$> findAttrByName ns "w" "styleId" element)
               <*> getElementStyleName ns element
               <*> Just (elemToRunStyle ns element parentStyle)
 
@@ -277,16 +292,32 @@ elemToRunStyle _ _ _ = defaultRunStyle
 getHeaderLevel :: NameSpaces -> Element -> Maybe (ParaStyleName, Int)
 getHeaderLevel ns element
   | Just styleName <- getElementStyleName ns element
-  , Just n <- stringToInteger . T.unpack =<<
+  , Just n <- stringToInteger =<<
               (T.stripPrefix "heading " . T.toLower $
                 fromStyleName styleName)
   , n > 0 = Just (styleName, fromInteger n)
 getHeaderLevel _ _ = Nothing
 
+getIndentation :: NameSpaces -> Element -> Maybe ParIndentation
+getIndentation ns el = do
+  indElement <- findChildByName ns "w" "pPr" el >>=
+                findChildByName ns "w" "ind"
+  return $ ParIndentation
+    {
+      leftParIndent = findAttrByName ns "w" "left" indElement <|>
+                      findAttrByName ns "w" "start" indElement >>=
+                      stringToInteger
+    , rightParIndent = findAttrByName ns "w" "right" indElement <|>
+                       findAttrByName ns "w" "end" indElement >>=
+                       stringToInteger
+    , hangingParIndent = findAttrByName ns "w" "hanging" indElement >>=
+                         stringToInteger
+    }
+
 getElementStyleName :: Coercible T.Text a => NameSpaces -> Element -> Maybe a
 getElementStyleName ns el = coerce <$>
-  ((findChildByName ns "w" "name" el >>= findAttrTextByName ns "w" "val")
-  <|> findAttrTextByName ns "w" "styleId" el)
+  ((findChildByName ns "w" "name" el >>= findAttrByName ns "w" "val")
+  <|> findAttrByName ns "w" "styleId" el)
 
 getNumInfo :: NameSpaces -> Element -> Maybe (T.Text, T.Text)
 getNumInfo ns element = do
@@ -294,19 +325,20 @@ getNumInfo ns element = do
               findChildByName ns "w" "numPr"
       lvl = fromMaybe "0" (numPr >>=
                            findChildByName ns "w" "ilvl" >>=
-                           findAttrTextByName ns "w" "val")
+                           findAttrByName ns "w" "val")
   numId <- numPr >>=
            findChildByName ns "w" "numId" >>=
-           findAttrTextByName ns "w" "val"
+           findAttrByName ns "w" "val"
   return (numId, lvl)
 
 elemToParStyleData :: NameSpaces -> Element -> Maybe ParStyle -> Maybe ParStyle
 elemToParStyleData ns element parentStyle
-  | Just styleId <- findAttrTextByName ns "w" "styleId" element
+  | Just styleId <- findAttrByName ns "w" "styleId" element
   , Just styleName <- getElementStyleName ns element
   = Just $ ParStyle
       {
         headingLev = getHeaderLevel ns element
+      , indent = getIndentation ns element
       , numInfo = getNumInfo ns element
       , psParentStyle = parentStyle
       , pStyleName = styleName

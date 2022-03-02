@@ -244,9 +244,16 @@ Or with stack:
 
     stack test --test-arguments='-p markdown'
 
-It is often helpful to add `-j4` (run tests in parallel)
-and `--hide-successes` (don't clutter output with successes)
-to the test arguments as well.
+It is often helpful to add `-j4` (run tests in parallel) and
+`--hide-successes` (don't clutter output with successes) to the test
+arguments as well. Collecting all options in a `cabal.project.local`
+file in the project's root directory can help to keep `cabal`
+commands short. E.g.:
+
+    flags: +embed_data_files
+    tests: True
+    test-show-details: direct
+    test-options: -j4 --hide-successes
 
 If you add a new feature to pandoc, please add tests as well, following
 the pattern of the existing tests. The test suite code is in
@@ -311,9 +318,6 @@ With stack:
 
     stack bench
 
-You can also build `weigh-pandoc` (`stack build pandoc:weigh-pandoc`)
-to get some statistics on memory usage.  (Eventually this should
-be incorporated into the benchmark suite.)
 
 Using the REPL
 --------------
@@ -372,7 +376,7 @@ The code
 --------
 
 Pandoc has a publicly accessible git repository on
-GitHub: <http://github.com/jgm/pandoc>.  To get a local copy of the source:
+GitHub: <https://github.com/jgm/pandoc>.  To get a local copy of the source:
 
     git clone https://github.com/jgm/pandoc.git
 
@@ -382,7 +386,7 @@ the pandoc library is in `src/`, the source for the tests is in
 
 The modules `Text.Pandoc.Definition`, `Text.Pandoc.Builder`, and
 `Text.Pandoc.Generic` are in a separate library `pandoc-types`.  The code can
-be found in <http://github.com/jgm/pandoc-types>.
+be found in <https://github.com/jgm/pandoc-types>.
 
 To build pandoc, you will need a working installation of the
 [Haskell platform].
@@ -402,11 +406,11 @@ The library is structured as follows:
     tree automatically.
   - `Text.Pandoc.Readers.*` are the readers, and `Text.Pandoc.Writers.*`
     are the writers.
-  - `Text.Pandoc.Biblio` is a utility module for formatting citations
-    using citeproc-hs.
+  - `Text.Pandoc.Citeproc.*` contain the code for citation handling,
+    including an interface to the [citeproc] library.
   - `Text.Pandoc.Data` is used to embed data files when the `embed_data_files`
-    cabal flag is used.  It is generated from `src/Text/Pandoc/Data.hsb` using
-    the preprocessor [hsb2hs].
+    cabal flag is used.
+  - `Text.Pandoc.Emoji` is a thin wrapper around [emojis].
   - `Text.Pandoc.Highlighting` contains the interface to the
     skylighting library, which is used for code syntax highlighting.
   - `Text.Pandoc.ImageSize` is a utility module containing functions for
@@ -417,7 +421,6 @@ The library is structured as follows:
   - `Text.Pandoc.PDF` contains functions for producing a PDF from a
     LaTeX source.
   - `Text.Pandoc.Parsing` contains parsing functions used in multiple readers.
-  - `Text.Pandoc.Pretty` is a pretty-printing library specialized to
     the needs of pandoc.
   - `Text.Pandoc.SelfContained` contains functions for making an HTML
     file "self-contained," by importing remotely linked images, CSS,
@@ -445,14 +448,16 @@ you may want to consider submitting a pull request to the
 [closed issues]: https://github.com/jgm/pandoc/issues?q=is%3Aissue+is%3Aclosed
 [latest released version]: https://github.com/jgm/pandoc/releases/latest
 [Nightly builds]: https://github.com/jgm/pandoc/actions?query=workflow%3ANightly
-[pandoc-discuss]: http://groups.google.com/group/pandoc-discuss
+[pandoc-discuss]: https://groups.google.com/group/pandoc-discuss
 [issue tracker]: https://github.com/jgm/pandoc/issues
-[User's Guide]: http://pandoc.org/MANUAL.html
-[FAQs]:  http://pandoc.org/faqs.html
-[EditorConfig]: http://editorconfig.org/
-[Haskell platform]: http://www.haskell.org/platform/
+[User's Guide]: https://pandoc.org/MANUAL.html
+[FAQs]:  https://pandoc.org/faqs.html
+[EditorConfig]: https://editorconfig.org/
+[Haskell platform]: https://www.haskell.org/platform/
 [hlint]: https://hackage.haskell.org/package/hlint
-[hsb2hs]: http://hackage.haskell.org/package/hsb2hs
+[citeproc]: https://hackage.haskell.org/package/citeproc
+[emojis]: https://hackage.haskell.org/package/emojis
+[hsb2hs]: https://hackage.haskell.org/package/hsb2hs
 [pre-commit hook]: https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks
 [GitHub labels]: https://github.com/jgm/pandoc/labels
 [good first issue]:https://github.com/jgm/pandoc/labels/good%20first%20issue

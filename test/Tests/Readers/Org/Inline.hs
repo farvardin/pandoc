@@ -1,8 +1,7 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Tests.Readers.Org.Inline
-   Copyright   : © 2014-2021 Albert Krewinkel
+   Copyright   : © 2014-2022 Albert Krewinkel
    License     : GNU GPL, version 2 or above
 
    Maintainer  : Albert Krewinkel <albert@zeitkraut.de>
@@ -13,7 +12,6 @@ Tests parsing of org inlines.
 -}
 module Tests.Readers.Org.Inline (tests) where
 
-import Prelude
 import Data.List (intersperse)
 import Test.Tasty (TestTree, testGroup)
 import Tests.Helpers ((=?>))
@@ -214,6 +212,14 @@ tests =
                 , "[[file:guinea-pig.gif]]"
                 ] =?>
       para (imageWith ("", [], [("width", "50%")]) "guinea-pig.gif" "" "")
+
+    , "HTML attributes can have trailing spaces" =:
+      T.unlines [ "#+attr_html: :width 100% :height 360px  "
+                , "[[file:fireworks.jpg]]"
+                ] =?>
+      let kv = [("width", "100%"), ("height", "360px")]
+      in para (imageWith (mempty, mempty, kv) "fireworks.jpg" mempty mempty)
+
 
     , "Uppercase extension" =:
       "[[file:test.PNG]]" =?>

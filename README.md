@@ -8,10 +8,10 @@ pandoc --lua-filter tools/update-readme.lua README.template -o README.md
 [![github
 release](https://img.shields.io/github/release/jgm/pandoc.svg?label=current+release)](https://github.com/jgm/pandoc/releases)
 [![hackage
-release](https://img.shields.io/hackage/v/pandoc.svg?label=hackage)](http://hackage.haskell.org/package/pandoc)
-[![homebrew](https://img.shields.io/homebrew/v/pandoc.svg)](http://brewformulas.org/Pandoc)
+release](https://img.shields.io/hackage/v/pandoc.svg?label=hackage)](https://hackage.haskell.org/package/pandoc)
+[![homebrew](https://img.shields.io/homebrew/v/pandoc.svg)](https://formulae.brew.sh/formula/pandoc)
 [![stackage LTS
-package](http://stackage.org/package/pandoc/badge/lts)](http://stackage.org/lts/package/pandoc)
+package](https://stackage.org/package/pandoc/badge/lts)](https://www.stackage.org/lts/package/pandoc-types)
 [![CI
 tests](https://github.com/jgm/pandoc/workflows/CI%20tests/badge.svg)](https://github.com/jgm/pandoc/actions)
 [![license](https://img.shields.io/badge/license-GPLv2+-lightgray.svg)](https://www.gnu.org/licenses/gpl.html)
@@ -20,7 +20,7 @@ groups](https://img.shields.io/badge/pandoc-discuss-red.svg?style=social)](https
 
 ## The universal markup converter
 
-Pandoc is a [Haskell](http://haskell.org) library for converting from
+Pandoc is a [Haskell](https://haskell.org) library for converting from
 one markup format to another, and a command-line tool that uses this
 library. It can convert *from*
 
@@ -76,6 +76,8 @@ library. It can convert *from*
 -   `odt` ([ODT](https://en.wikipedia.org/wiki/OpenDocument))
 -   `opml` ([OPML](http://dev.opml.org/spec2.html))
 -   `org` ([Emacs Org mode](https://orgmode.org))
+-   `rtf` ([Rich Text
+    Format](https://en.wikipedia.org/wiki/Rich_Text_Format))
 -   `rst`
     ([reStructuredText](https://docutils.sourceforge.io/docs/ref/rst/introduction.html))
 -   `t2t` ([txt2tags](https://txt2tags.org))
@@ -85,6 +87,9 @@ library. It can convert *from*
 -   `twiki` ([TWiki
     markup](https://twiki.org/cgi-bin/view/TWiki/TextFormattingRules))
 -   `vimwiki` ([Vimwiki](https://vimwiki.github.io))
+-   the path of a custom Lua reader, see [Custom readers and
+    writers](https://pandoc.org/MANUAL.html#custom-readers-and-writers)
+    below
 
 </div>
 
@@ -95,6 +100,8 @@ It can convert *to*
 -   `asciidoc` ([AsciiDoc](https://www.methods.co.nz/asciidoc/)) or
     `asciidoctor` ([AsciiDoctor](https://asciidoctor.org/))
 -   `beamer` ([LaTeX beamer](https://ctan.org/pkg/beamer) slide show)
+-   `bibtex` ([BibTeX](https://ctan.org/pkg/bibtex) bibliography)
+-   `biblatex` ([BibLaTeX](https://ctan.org/pkg/biblatex) bibliography)
 -   `commonmark` ([CommonMark](https://commonmark.org) Markdown)
 -   `commonmark_x` ([CommonMark](https://commonmark.org) Markdown with
     extensions)
@@ -148,6 +155,7 @@ It can convert *to*
     Extra](https://michelf.ca/projects/php-markdown/extra/))
 -   `markdown_strict` (original unextended
     [Markdown](https://daringfireball.net/projects/markdown/))
+-   `markua` ([Markua](https://leanpub.com/markua/read))
 -   `mediawiki` ([MediaWiki
     markup](https://www.mediawiki.org/wiki/Help:Formatting))
 -   `ms` ([roff ms](https://man.cx/groff_ms(7)))
@@ -173,7 +181,7 @@ It can convert *to*
     and JavaScript slide show)
 -   `slidy` ([Slidy](https://www.w3.org/Talks/Tools/Slidy2/) HTML and
     JavaScript slide show)
--   `dzslides` ([DZSlides](http://paulrouget.com/dzslides/) HTML5 +
+-   `dzslides` ([DZSlides](https://paulrouget.com/dzslides/) HTML5 +
     JavaScript slide show),
 -   `revealjs` ([reveal.js](https://revealjs.com/) HTML5 + JavaScript
     slide show)
@@ -184,8 +192,9 @@ It can convert *to*
     markup](https://www.xwiki.org/xwiki/bin/view/Documentation/UserGuide/Features/XWikiSyntax/))
 -   `zimwiki` ([ZimWiki
     markup](https://zim-wiki.org/manual/Help/Wiki_Syntax.html))
--   the path of a custom Lua writer, see [Custom
-    writers](https://pandoc.org/MANUAL.html#custom-writers) below
+-   the path of a custom Lua writer, see [Custom readers and
+    writers](https://pandoc.org/MANUAL.html#custom-readers-and-writers)
+    below
 
 </div>
 
@@ -236,7 +245,7 @@ opening a new issue.
 
 ## License
 
-© 2006-2021 John MacFarlane (jgm@berkeley.edu). Released under the
-[GPL](http://www.gnu.org/copyleft/gpl.html "GNU General Public License"),
+© 2006-2022 John MacFarlane (jgm@berkeley.edu). Released under the
+[GPL](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html "GNU General Public License"),
 version 2 or greater. This software carries no warranty of any kind.
 (See COPYRIGHT for full copyright and warranty notices.)

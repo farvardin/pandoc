@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE PatternGuards       #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE ViewPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.LaTeX
-   Copyright   : Copyright (C) 2006-2021 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -18,23 +19,19 @@ module Text.Pandoc.Writers.LaTeX (
     writeLaTeX
   , writeBeamer
   ) where
-import Control.Applicative ((<|>))
 import Control.Monad.State.Strict
-import Data.Char (isAlphaNum, isAscii, isDigit, isLetter, isSpace,
-                  isPunctuation, ord)
-import Data.List (foldl', intersperse, nubBy, (\\), uncons)
+import Data.Char (isDigit)
+import Data.List (intersperse, (\\))
 import Data.Maybe (catMaybes, fromMaybe, isJust, mapMaybe, isNothing)
-import qualified Data.Map as M
 import Data.Text (Text)
 import qualified Data.Text as T
 import Network.URI (unEscapeString)
-import Text.DocTemplates (FromContext(lookupContext), renderTemplate,
-                          Val(..), Context(..))
-import Text.Pandoc.BCP47 (Lang (..), getLang, renderLang)
+import Text.DocTemplates (FromContext(lookupContext), renderTemplate)
+import Text.Collate.Lang (renderLang)
 import Text.Pandoc.Class.PandocMonad (PandocMonad, report, toLang)
 import Text.Pandoc.Definition
 import Text.Pandoc.Highlighting (formatLaTeXBlock, formatLaTeXInline, highlight,
-                                 styleToLaTeX, toListingsLanguage)
+                                 styleToLaTeX)
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Logging
 import Text.Pandoc.Options
@@ -44,10 +41,15 @@ import Text.Pandoc.Slides
 import Text.Pandoc.Walk (query, walk, walkM)
 import Text.Pandoc.Writers.LaTeX.Caption (getCaption)
 import Text.Pandoc.Writers.LaTeX.Table (tableToLaTeX)
+import Text.Pandoc.Writers.LaTeX.Citation (citationsToNatbib,
+                                           citationsToBiblatex)
 import Text.Pandoc.Writers.LaTeX.Types (LW, WriterState (..), startingState)
+import Text.Pandoc.Writers.LaTeX.Lang (toBabel)
+import Text.Pandoc.Writers.LaTeX.Util (stringToLaTeX, StringContext(..),
+                                       toLabel, inCmd,
+                                       wrapDiv, hypertarget, labelFor,
+                                       getListingsLanguage, mbBraced)
 import Text.Pandoc.Writers.Shared
-import Text.Printf (printf)
-import qualified Data.Text.Normalize as Normalize
 import qualified Text.Pandoc.Writers.AnnotatedTable as Ann
 
 -- | Convert Pandoc to LaTeX.
@@ -84,7 +86,8 @@ pandocToLaTeX options (Pandoc meta blocks) = do
               blockListToLaTeX
               (fmap chomp . inlineListToLaTeX)
               meta
-  let chaptersClasses = ["memoir","book","report","scrreprt","scrbook","extreport","extbook","tufte-book"]
+  let chaptersClasses = ["memoir","book","report","scrreprt","scrreport",
+                        "scrbook","extreport","extbook","tufte-book"]
   let frontmatterClasses = ["memoir","book","scrbook","extbook","tufte-book"]
   -- these have \frontmatter etc.
   beamer <- gets stBeamer
@@ -128,12 +131,6 @@ pandocToLaTeX options (Pandoc meta blocks) = do
                               ,("tmargin","margin-top")
                               ,("bmargin","margin-bottom")
                               ]
-  let toPolyObj :: Lang -> Val Text
-      toPolyObj lang = MapVal $ Context $
-                        M.fromList [ ("name" , SimpleVal $ literal name)
-                                   , ("options" , SimpleVal $ literal opts) ]
-        where
-          (name, opts) = toPolyglossia lang
   mblang <- toLang $ case getLang options meta of
                           Just l -> Just l
                           Nothing | null docLangs -> Nothing
@@ -141,6 +138,11 @@ pandocToLaTeX options (Pandoc meta blocks) = do
   -- we need a default here since lang is used in template conditionals
 
   let dirs = query (extract "dir") blocks
+
+  let nociteIds = query (\case
+                           Cite cs _ -> map citationId cs
+                           _         -> [])
+                    $ lookupMetaInlines "nocite" meta
 
   let context  =  defField "toc" (writerTableOfContents options) $
                   defField "toc-depth" (tshow
@@ -164,6 +166,7 @@ pandocToLaTeX options (Pandoc meta blocks) = do
                   defField "has-chapters" (stHasChapters st) $
                   defField "has-frontmatter" (documentClass `elem` frontmatterClasses) $
                   defField "listings" (writerListings options || stLHS st) $
+                  defField "zero-width-non-joiner" (stZwnj st) $
                   defField "beamer" beamer $
                   (if stHighlighting st
                       then case writerHighlightStyle options of
@@ -174,9 +177,11 @@ pandocToLaTeX options (Pandoc meta blocks) = do
                       else id) $
                   (case writerCiteMethod options of
                          Natbib   -> defField "biblio-title" biblioTitle .
-                                     defField "natbib" True
+                                     defField "natbib" True .
+                                     defField "nocite-ids" nociteIds
                          Biblatex -> defField "biblio-title" biblioTitle .
-                                     defField "biblatex" True
+                                     defField "biblatex" True .
+                                     defField "nocite-ids" nociteIds
                          _        -> id) $
                   defField "colorlinks" (any hasStringValue
                            ["citecolor", "urlcolor", "linkcolor", "toccolor",
@@ -204,190 +209,13 @@ pandocToLaTeX options (Pandoc meta blocks) = do
                       (literal $ toBabel l)) mblang
         $ defField "babel-otherlangs"
              (map (literal . toBabel) docLangs)
-        $ defField "babel-newcommands" (vcat $
-           map (\(poly, babel) -> literal $
-            -- \textspanish and \textgalician are already used by babel
-            -- save them as \oritext... and let babel use that
-            if poly `elem` ["spanish", "galician"]
-               then "\\let\\oritext" <> poly <> "\\text" <> poly <> "\n" <>
-                    "\\AddBabelHook{" <> poly <> "}{beforeextras}" <>
-                      "{\\renewcommand{\\text" <> poly <> "}{\\oritext"
-                      <> poly <> "}}\n" <>
-                    "\\AddBabelHook{" <> poly <> "}{afterextras}" <>
-                      "{\\renewcommand{\\text" <> poly <> "}[2][]{\\foreignlanguage{"
-                      <> poly <> "}{##2}}}"
-               else (if poly == "latin" -- see #4161
-                        then "\\providecommand{\\textlatin}{}\n\\renewcommand"
-                        else "\\newcommand") <> "{\\text" <> poly <>
-                    "}[2][]{\\foreignlanguage{" <> babel <> "}{#2}}\n" <>
-                    "\\newenvironment{" <> poly <>
-                    "}[2][]{\\begin{otherlanguage}{" <>
-                    babel <> "}}{\\end{otherlanguage}}"
-            )
-            -- eliminate duplicates that have same polyglossia name
-            $ nubBy (\a b -> fst a == fst b)
-            -- find polyglossia and babel names of languages used in the document
-            $ map (\l -> (fst $ toPolyglossia l, toBabel l)) docLangs
-          )
-        $ maybe id (defField "polyglossia-lang" . toPolyObj) mblang
-        $ defField "polyglossia-otherlangs"
-             (ListVal (map toPolyObj docLangs :: [Val Text]))
-        $
-                  defField "latex-dir-rtl"
+        $ defField "latex-dir-rtl"
            ((render Nothing <$> getField "dir" context) ==
                Just ("rtl" :: Text)) context
   return $ render colwidth $
     case writerTemplate options of
        Nothing  -> main
        Just tpl -> renderTemplate tpl context'
-
-data StringContext = TextString
-                   | URLString
-                   | CodeString
-                   deriving (Eq)
-
--- escape things as needed for LaTeX
-stringToLaTeX :: PandocMonad m => StringContext -> Text -> LW m Text
-stringToLaTeX context zs = do
-  opts <- gets stOptions
-  return $ T.pack $
-    foldr (go opts context) mempty $ T.unpack $
-    if writerPreferAscii opts
-       then Normalize.normalize Normalize.NFD zs
-       else zs
- where
-  go :: WriterOptions -> StringContext -> Char -> String -> String
-  go opts ctx x xs   =
-    let ligatures = isEnabled Ext_smart opts && ctx == TextString
-        isUrl = ctx == URLString
-        mbAccentCmd =
-          if writerPreferAscii opts && ctx == TextString
-             then uncons xs >>= \(c,_) -> M.lookup c accents
-             else Nothing
-        emits s =
-          case mbAccentCmd of
-               Just cmd ->
-                 cmd <> "{" <> s <> "}" <> drop 1 xs -- drop combining accent
-               Nothing  -> s <> xs
-        emitc c =
-          case mbAccentCmd of
-               Just cmd ->
-                 cmd <> "{" <> [c] <> "}" <> drop 1 xs -- drop combining accent
-               Nothing  -> c : xs
-        emitcseq cs =
-          case xs of
-            c:_ | isLetter c
-                , ctx == TextString
-                             -> cs <> " " <> xs
-                | isSpace c  -> cs <> "{}" <> xs
-                | ctx == TextString
-                             -> cs <> xs
-            _ -> cs <> "{}" <> xs
-        emitquote cs =
-          case xs of
-            '`':_  -> cs <> "\\," <> xs -- add thin space
-            '\'':_ -> cs <> "\\," <> xs -- add thin space
-            _      -> cs <> xs
-    in case x of
-         '?' | ligatures ->  -- avoid ?` ligature
-           case xs of
-             '`':_ -> emits "?{}"
-             _     -> emitc x
-         '!' | ligatures ->  -- avoid !` ligature
-           case xs of
-             '`':_ -> emits "!{}"
-             _     -> emitc x
-         '{' -> emits "\\{"
-         '}' -> emits "\\}"
-         '`' | ctx == CodeString -> emitcseq "\\textasciigrave"
-         '$' | not isUrl -> emits "\\$"
-         '%' -> emits "\\%"
-         '&' -> emits "\\&"
-         '_' | not isUrl -> emits "\\_"
-         '#' -> emits "\\#"
-         '-' | not isUrl -> case xs of
-                     -- prevent adjacent hyphens from forming ligatures
-                     ('-':_) -> emits "-\\/"
-                     _       -> emitc '-'
-         '~' | not isUrl -> emitcseq "\\textasciitilde"
-         '^' -> emits "\\^{}"
-         '\\'| isUrl     -> emitc '/' -- NB. / works as path sep even on Windows
-             | otherwise -> emitcseq "\\textbackslash"
-         '|' | not isUrl -> emitcseq "\\textbar"
-         '<' -> emitcseq "\\textless"
-         '>' -> emitcseq "\\textgreater"
-         '[' -> emits "{[}"  -- to avoid interpretation as
-         ']' -> emits "{]}"  -- optional arguments
-         '\'' | ctx == CodeString -> emitcseq "\\textquotesingle"
-         '\160' -> emits "~"
-         '\x200B' -> emits "\\hspace{0pt}"  -- zero-width space
-         '\x202F' -> emits "\\,"
-         '\x2026' -> emitcseq "\\ldots"
-         '\x2018' | ligatures -> emitquote "`"
-         '\x2019' | ligatures -> emitquote "'"
-         '\x201C' | ligatures -> emitquote "``"
-         '\x201D' | ligatures -> emitquote "''"
-         '\x2014' | ligatures -> emits "---"
-         '\x2013' | ligatures -> emits "--"
-         _ | writerPreferAscii opts
-             -> case x of
-                  'ı' -> emitcseq "\\i"
-                  'ȷ' -> emitcseq "\\j"
-                  'å' -> emitcseq "\\aa"
-                  'Å' -> emitcseq "\\AA"
-                  'ß' -> emitcseq "\\ss"
-                  'ø' -> emitcseq "\\o"
-                  'Ø' -> emitcseq "\\O"
-                  'Ł' -> emitcseq "\\L"
-                  'ł' -> emitcseq "\\l"
-                  'æ' -> emitcseq "\\ae"
-                  'Æ' -> emitcseq "\\AE"
-                  'œ' -> emitcseq "\\oe"
-                  'Œ' -> emitcseq "\\OE"
-                  '£' -> emitcseq "\\pounds"
-                  '€' -> emitcseq "\\euro"
-                  '©' -> emitcseq "\\copyright"
-                  _   -> emitc x
-           | otherwise -> emitc x
-
-accents :: M.Map Char String
-accents = M.fromList
-  [ ('\779' , "\\H")
-  , ('\768' , "\\`")
-  , ('\769' , "\\'")
-  , ('\770' , "\\^")
-  , ('\771' , "\\~")
-  , ('\776' , "\\\"")
-  , ('\775' , "\\.")
-  , ('\772' , "\\=")
-  , ('\781' , "\\|")
-  , ('\817' , "\\b")
-  , ('\807' , "\\c")
-  , ('\783' , "\\G")
-  , ('\777' , "\\h")
-  , ('\803' , "\\d")
-  , ('\785' , "\\f")
-  , ('\778' , "\\r")
-  , ('\865' , "\\t")
-  , ('\782' , "\\U")
-  , ('\780' , "\\v")
-  , ('\774' , "\\u")
-  , ('\808' , "\\k")
-  , ('\785' , "\\newtie")
-  , ('\8413', "\\textcircled")
-  ]
-
-toLabel :: PandocMonad m => Text -> LW m Text
-toLabel z = go `fmap` stringToLaTeX URLString z
- where
-   go = T.concatMap $ \x -> case x of
-     _ | (isLetter x || isDigit x) && isAscii x -> T.singleton x
-       | x `elemText` "_-+=:;." -> T.singleton x
-       | otherwise -> T.pack $ "ux" <> printf "%x" (ord x)
-
--- | Puts contents into LaTeX command.
-inCmd :: Text -> Doc Text -> Doc Text
-inCmd cmd contents = char '\\' <> literal cmd <> braces contents
 
 toSlides :: PandocMonad m => [Block] -> LW m [Block]
 toSlides bs = do
@@ -408,10 +236,13 @@ elementToBeamer slideLevel (Div (ident,"section":dclasses,dkvs)
              isSlide _                         = False
          let (titleBs, slideBs) = break isSlide ys
          return $
-           if null titleBs
-              then Div (ident,"section":dclasses,dkvs) xs
-              else Div (ident,"section":dclasses,dkvs)
-                    (h : Div ("","slide":dclasses,dkvs) (h:titleBs) : slideBs)
+           case titleBs of
+              [] -> Div (ident,"section":dclasses,dkvs) xs
+              [Div (_,"notes":_,_) _] ->  -- see #7857, don't create frame
+                    -- just for speaker notes after section heading
+                    Div (ident,"section":dclasses,dkvs) xs
+              _  -> Div (ident,"section":dclasses,dkvs)
+                     (h : Div ("","slide":dclasses,dkvs) (h:titleBs) : slideBs)
   | otherwise
     = return $ Div (ident,"slide":dclasses,dkvs) xs
 elementToBeamer _ x = return x
@@ -427,7 +258,12 @@ blockToLaTeX :: PandocMonad m
              => Block     -- ^ Block to convert
              -> LW m (Doc Text)
 blockToLaTeX Null = return empty
-blockToLaTeX (Div attr@(identifier,"block":_,_) (Header _ _ ils : bs)) = do
+blockToLaTeX (Div attr@(identifier,"block":dclasses,_)
+             (Header _ _ ils : bs)) = do
+  let blockname
+        | "example" `elem` dclasses = "exampleblock"
+        | "alert" `elem` dclasses = "alertblock"
+        | otherwise = "block"
   ref <- toLabel identifier
   let anchor = if T.null identifier
                   then empty
@@ -435,8 +271,8 @@ blockToLaTeX (Div attr@(identifier,"block":_,_) (Header _ _ ils : bs)) = do
                        braces (literal ref) <> braces empty
   title' <- inlineListToLaTeX ils
   contents <- blockListToLaTeX bs
-  wrapDiv attr $ ("\\begin{block}" <> braces title' <> anchor) $$
-                 contents $$ "\\end{block}"
+  wrapDiv attr $ ("\\begin" <> braces blockname <> braces title' <> anchor) $$
+                 contents $$ "\\end" <> braces blockname
 blockToLaTeX (Div (identifier,"slide":dclasses,dkvs)
                (Header _ (_,hclasses,hkvs) ils : bs)) = do
   -- note: [fragile] is required or verbatim breaks
@@ -449,14 +285,15 @@ blockToLaTeX (Div (identifier,"slide":dclasses,dkvs)
   let fragile = "fragile" `elem` classes ||
                 not (null $ query hasCodeBlock bs ++ query hasCode bs)
   let frameoptions = ["allowdisplaybreaks", "allowframebreaks", "fragile",
-                      "b", "c", "t", "environment",
+                      "b", "c", "t", "environment", "s", "squeeze",
                       "label", "plain", "shrink", "standout",
                       "noframenumbering"]
   let optionslist = ["fragile" | fragile
                                , isNothing (lookup "fragile" kvs)
                                , "fragile" `notElem` classes] ++
                     [k | k <- classes, k `elem` frameoptions] ++
-                    [k <> "=" <> v | (k,v) <- kvs, k `elem` frameoptions]
+                    [k <> "=" <> v | (k,v) <- kvs, k `elem` frameoptions] ++
+                    [v | ("frameoptions", v) <- kvs]
   let options = if null optionslist
                    then empty
                    else brackets (literal (T.intercalate "," optionslist))
@@ -500,12 +337,13 @@ blockToLaTeX (Div (identifier,classes,kvs) bs) = do
                else blockListToLaTeX bs
   modify $ \st -> st{ stIncremental = oldIncremental }
   linkAnchor' <- hypertarget True identifier empty
-  -- see #2704 for the motivation for adding \leavevmode:
+  -- see #2704 for the motivation for adding \leavevmode
+  -- and #7078 for \vadjust pre
   let linkAnchor =
         case bs of
           Para _ : _
             | not (isEmpty linkAnchor')
-              -> "\\leavevmode" <> linkAnchor' <> "%"
+              -> "\\leavevmode\\vadjust pre{" <> linkAnchor' <> "}%"
           _ -> linkAnchor'
       wrapNotes txt = if beamer && "notes" `elem` classes
                          then "\\note" <> braces txt -- speaker notes
@@ -513,10 +351,7 @@ blockToLaTeX (Div (identifier,classes,kvs) bs) = do
   wrapNotes <$> wrapDiv (identifier,classes,kvs) result
 blockToLaTeX (Plain lst) =
   inlineListToLaTeX lst
--- title beginning with fig: indicates that the image is a figure
-blockToLaTeX (Para [Image attr@(ident, _, _) txt (src,tgt)])
-  | Just tit <- T.stripPrefix "fig:" tgt
-  = do
+blockToLaTeX (SimpleFigure attr@(ident, _, _) txt (src, tit)) = do
       (capt, captForLof, footnotes) <- getCaption inlineListToLaTeX True txt
       lab <- labelFor ident
       let caption = "\\caption" <> captForLof <> braces capt <> lab
@@ -559,6 +394,7 @@ blockToLaTeX (BlockQuote lst) = do
 blockToLaTeX (CodeBlock (identifier,classes,keyvalAttr) str) = do
   opts <- gets stOptions
   lab <- labelFor identifier
+  inNote <- stInNote <$> get
   linkAnchor' <- hypertarget True identifier lab
   let linkAnchor = if isEmpty linkAnchor'
                       then empty
@@ -568,8 +404,7 @@ blockToLaTeX (CodeBlock (identifier,classes,keyvalAttr) str) = do
         return $ flush (linkAnchor $$ "\\begin{code}" $$ literal str $$
                             "\\end{code}") $$ cr
   let rawCodeBlock = do
-        st <- get
-        env <- if stInNote st
+        env <- if inNote
                   then modify (\s -> s{ stVerbInNote = True }) >>
                        return "Verbatim"
                   else return "verbatim"
@@ -605,14 +440,13 @@ blockToLaTeX (CodeBlock (identifier,classes,keyvalAttr) str) = do
                  "\\end{lstlisting}") $$ cr
   let highlightedCodeBlock =
         case highlight (writerSyntaxMap opts)
-                 formatLaTeXBlock ("",classes,keyvalAttr) str of
+                 formatLaTeXBlock ("",classes ++ ["default"],keyvalAttr) str of
                Left msg -> do
                  unless (T.null msg) $
                    report $ CouldNotHighlight msg
                  rawCodeBlock
                Right h -> do
-                  st <- get
-                  when (stInNote st) $ modify (\s -> s{ stVerbInNote = True })
+                  when inNote $ modify (\s -> s{ stVerbInNote = True })
                   modify (\s -> s{ stHighlighting = True })
                   return (flush $ linkAnchor $$ text (T.unpack h))
   case () of
@@ -621,6 +455,12 @@ blockToLaTeX (CodeBlock (identifier,classes,keyvalAttr) str) = do
        | writerListings opts                 -> listingsCodeBlock
        | not (null classes) && isJust (writerHighlightStyle opts)
                                              -> highlightedCodeBlock
+       -- we don't want to use \begin{verbatim} if our code
+       -- contains \end{verbatim}:
+       | inNote
+       , "\\end{Verbatim}" `T.isInfixOf` str -> highlightedCodeBlock
+       | not inNote
+       , "\\end{verbatim}" `T.isInfixOf` str -> highlightedCodeBlock
        | otherwise                           -> rawCodeBlock
 blockToLaTeX b@(RawBlock f x) = do
   beamer <- gets stBeamer
@@ -778,7 +618,7 @@ defListItemToLaTeX (term, defs) = do
      _                       ->
        "\\item" <> brackets term'' $$ def'
 
--- | Craft the section header, inserting the secton reference, if supplied.
+-- | Craft the section header, inserting the section reference, if supplied.
 sectionHeader :: PandocMonad m
               => [Text]  -- classes
               -> Text
@@ -852,81 +692,6 @@ sectionHeader classes ident level lst = do
                                 braces txtNoNotes
                          else empty
 
-mapAlignment :: Text -> Text
-mapAlignment a = case a of
-                   "top" -> "T"
-                   "top-baseline" -> "t"
-                   "bottom" -> "b"
-                   "center" -> "c"
-                   _ -> a
-
-wrapDiv :: PandocMonad m => Attr -> Doc Text -> LW m (Doc Text)
-wrapDiv (_,classes,kvs) t = do
-  beamer <- gets stBeamer
-  let align dir txt = inCmd "begin" dir $$ txt $$ inCmd "end" dir
-  lang <- toLang $ lookup "lang" kvs
-  let wrapColumns = if beamer && "columns" `elem` classes
-                    then \contents ->
-                           let valign = maybe "T" mapAlignment (lookup "align" kvs)
-                               totalwidth = maybe [] (\x -> ["totalwidth=" <> x])
-                                 (lookup "totalwidth" kvs)
-                               onlytextwidth = filter ("onlytextwidth" ==) classes
-                               options = text $ T.unpack $ T.intercalate "," $
-                                 valign : totalwidth ++ onlytextwidth
-                           in inCmd "begin" "columns" <> brackets options
-                              $$ contents
-                              $$ inCmd "end" "columns"
-                    else id
-      wrapColumn  = if beamer && "column" `elem` classes
-                    then \contents ->
-                           let valign =
-                                 maybe ""
-                                 (brackets . text . T.unpack . mapAlignment)
-                                 (lookup "align" kvs)
-                               w = maybe "0.48" fromPct (lookup "width" kvs)
-                           in  inCmd "begin" "column" <>
-                               valign <>
-                               braces (literal w <> "\\textwidth")
-                               $$ contents
-                               $$ inCmd "end" "column"
-                    else id
-      fromPct xs =
-        case T.unsnoc xs of
-          Just (ds, '%') -> case safeRead ds of
-                              Just digits -> showFl (digits / 100 :: Double)
-                              Nothing -> xs
-          _              -> xs
-      wrapDir = case lookup "dir" kvs of
-                  Just "rtl" -> align "RTL"
-                  Just "ltr" -> align "LTR"
-                  _          -> id
-      wrapLang txt = case lang of
-                       Just lng -> let (l, o) = toPolyglossiaEnv lng
-                                       ops = if T.null o
-                                             then ""
-                                             else brackets $ literal o
-                                   in  inCmd "begin" (literal l) <> ops
-                                       $$ blankline <> txt <> blankline
-                                       $$ inCmd "end" (literal l)
-                       Nothing  -> txt
-  return $ wrapColumns . wrapColumn . wrapDir . wrapLang $ t
-
-hypertarget :: PandocMonad m => Bool -> Text -> Doc Text -> LW m (Doc Text)
-hypertarget _ "" x    = return x
-hypertarget addnewline ident x = do
-  ref <- literal `fmap` toLabel ident
-  return $ text "\\hypertarget"
-              <> braces ref
-              <> braces ((if addnewline && not (isEmpty x)
-                             then "%" <> cr
-                             else empty) <> x)
-
-labelFor :: PandocMonad m => Text -> LW m (Doc Text)
-labelFor ""    = return empty
-labelFor ident = do
-  ref <- literal `fmap` toLabel ident
-  return $ text "\\label" <> braces ref
-
 -- | Convert list of inline elements to LaTeX.
 inlineListToLaTeX :: PandocMonad m
                   => [Inline]  -- ^ Inlines to convert
@@ -951,10 +716,6 @@ inlineListToLaTeX lst = hcat <$>
            fixInitialLineBreaks xs
        fixInitialLineBreaks xs = xs
 
-isQuoted :: Inline -> Bool
-isQuoted (Quoted _ _) = True
-isQuoted _            = False
-
 -- | Convert inline element to LaTeX
 inlineToLaTeX :: PandocMonad m
               => Inline    -- ^ Inline to convert
@@ -975,19 +736,19 @@ inlineToLaTeX (Span (id',classes,kvs) ils) = do
       kvToCmd _ = Nothing
       langCmds =
         case lang of
-           Just lng -> let (l, o) = toPolyglossia lng
-                           ops = if T.null o then "" else "[" <> o <> "]"
-                       in  ["text" <> l <> ops]
+           Just lng -> let l = toBabel lng
+                       in  ["foreignlanguage{" <> l <> "}"]
            Nothing  -> []
   let cmds = mapMaybe classToCmd classes ++ mapMaybe kvToCmd kvs ++ langCmds
   contents <- inlineListToLaTeX ils
   return $
-    (case classes of
-              ["csl-block"] -> (cr <>)
-              ["csl-left-margin"] -> (cr <>)
-              ["csl-right-inline"] -> (cr <>)
-              ["csl-indent"] -> (cr <>)
-              _ -> id) $
+    (if "csl-right-inline" `elem` classes
+        then ("%" <>) -- see #7932
+        else id) $
+    (if any (`elem` classes)
+            ["csl-block","csl-left-margin","csl-right-inline","csl-indent"]
+        then (cr <>)
+        else id) $
     (if T.null id'
         then empty
         else "\\protect" <> linkAnchor) <>
@@ -995,7 +756,9 @@ inlineToLaTeX (Span (id',classes,kvs) ils) = do
         then braces contents
         else foldr inCmd contents cmds)
 inlineToLaTeX (Emph lst) = inCmd "emph" <$> inlineListToLaTeX lst
-inlineToLaTeX (Underline lst) = inCmd "underline" <$> inlineListToLaTeX lst
+inlineToLaTeX (Underline lst) = do
+  modify $ \st -> st{ stStrikeout = True } -- this gives us the ulem package
+  inCmd "uline" <$> inlineListToLaTeX lst
 inlineToLaTeX (Strong lst) = inCmd "textbf" <$> inlineListToLaTeX lst
 inlineToLaTeX (Strikeout lst) = do
   -- we need to protect VERB in an mbox or we get an error
@@ -1015,8 +778,8 @@ inlineToLaTeX (Cite cits lst) = do
   st <- get
   let opts = stOptions st
   case writerCiteMethod opts of
-     Natbib   -> citationsToNatbib cits
-     Biblatex -> citationsToBiblatex cits
+     Natbib   -> citationsToNatbib inlineListToLaTeX cits
+     Biblatex -> citationsToBiblatex inlineListToLaTeX cits
      _        -> inlineListToLaTeX lst
 
 inlineToLaTeX (Code (_,classes,kvs) str) = do
@@ -1040,7 +803,19 @@ inlineToLaTeX (Code (_,classes,kvs) str) = do
         let chr = case "!\"'()*,-./:;?@" \\ T.unpack str of
                        (c:_) -> c
                        []    -> '!'
-        let str' = escapeStringUsing (backslashEscapes "\\{}%~_&#^") str
+        let isEscapable '\\' = True
+            isEscapable '{'  = True
+            isEscapable '}'  = True
+            isEscapable '%'  = True
+            isEscapable '~'  = True
+            isEscapable '_'  = True
+            isEscapable '&'  = True
+            isEscapable '#'  = True
+            isEscapable '^'  = True
+            isEscapable _    = False
+        let escChar c | isEscapable c = T.pack ['\\',c]
+                      | otherwise     = T.singleton c
+        let str' = T.concatMap escChar str
         -- we always put lstinline in a dummy 'passthrough' command
         -- (defined in the default template) so that we don't have
         -- to change the way we escape characters depending on whether
@@ -1090,6 +865,10 @@ inlineToLaTeX (Quoted qt lst) = do
                    if isEnabled Ext_smart opts
                       then char '`' <> inner <> char '\''
                       else char '\x2018' <> inner <> char '\x2019'
+    where
+      isQuoted (Span _ (x:_)) = isQuoted x
+      isQuoted (Quoted _ _)   = True
+      isQuoted _              = False
 inlineToLaTeX (Str str) = do
   setEmptyLine False
   liftM literal $ stringToLaTeX TextString str
@@ -1112,7 +891,7 @@ inlineToLaTeX il@(RawInline f str) = do
 inlineToLaTeX LineBreak = do
   emptyLine <- gets stEmptyLine
   setEmptyLine True
-  return $ (if emptyLine then "~" else "") <> "\\\\" <> cr
+  return $ (if emptyLine then "\\strut " else "") <> "\\\\" <> cr
 inlineToLaTeX SoftBreak = do
   wrapText <- gets (writerWrapText . stOptions)
   case wrapText of
@@ -1227,153 +1006,6 @@ protectCode x = [x]
 setEmptyLine :: PandocMonad m => Bool -> LW m ()
 setEmptyLine b = modify $ \st -> st{ stEmptyLine = b }
 
-citationsToNatbib :: PandocMonad m => [Citation] -> LW m (Doc Text)
-citationsToNatbib
-            [one]
-  = citeCommand c p s k
-  where
-    Citation { citationId = k
-             , citationPrefix = p
-             , citationSuffix = s
-             , citationMode = m
-             }
-      = one
-    c = case m of
-             AuthorInText   -> "citet"
-             SuppressAuthor -> "citeyearpar"
-             NormalCitation -> "citep"
-
-citationsToNatbib cits
-  | noPrefix (tail cits) && noSuffix (init cits) && ismode NormalCitation cits
-  = citeCommand "citep" p s ks
-  where
-     noPrefix  = all (null . citationPrefix)
-     noSuffix  = all (null . citationSuffix)
-     ismode m  = all ((==) m  . citationMode)
-     p         = citationPrefix  $
-                 head cits
-     s         = citationSuffix  $
-                 last cits
-     ks        = T.intercalate ", " $ map citationId cits
-
-citationsToNatbib (c:cs) | citationMode c == AuthorInText = do
-     author <- citeCommand "citeauthor" [] [] (citationId c)
-     cits   <- citationsToNatbib (c { citationMode = SuppressAuthor } : cs)
-     return $ author <+> cits
-
-citationsToNatbib cits = do
-  cits' <- mapM convertOne cits
-  return $ text "\\citetext{" <> foldl' combineTwo empty cits' <> text "}"
-  where
-    combineTwo a b | isEmpty a = b
-                   | otherwise = a <> text "; " <> b
-    convertOne Citation { citationId = k
-                        , citationPrefix = p
-                        , citationSuffix = s
-                        , citationMode = m
-                        }
-        = case m of
-               AuthorInText   -> citeCommand "citealt"  p s k
-               SuppressAuthor -> citeCommand "citeyear" p s k
-               NormalCitation -> citeCommand "citealp"  p s k
-
-citeCommand :: PandocMonad m
-            => Text -> [Inline] -> [Inline] -> Text -> LW m (Doc Text)
-citeCommand c p s k = do
-  args <- citeArguments p s k
-  return $ literal ("\\" <> c) <> args
-
-type Prefix = [Inline]
-type Suffix = [Inline]
-type CiteId = Text
-data CiteGroup = CiteGroup Prefix Suffix [CiteId]
-
-citeArgumentsList :: PandocMonad m
-              => CiteGroup -> LW m (Doc Text)
-citeArgumentsList (CiteGroup _ _ []) = return empty
-citeArgumentsList (CiteGroup pfxs sfxs ids) = do
-      pdoc <- inlineListToLaTeX pfxs
-      sdoc <- inlineListToLaTeX sfxs'
-      return $ optargs pdoc sdoc <>
-              braces (literal (T.intercalate "," (reverse ids)))
-      where sfxs' = stripLocatorBraces $ case sfxs of
-                (Str t : r) -> case T.uncons t of
-                  Just (x, xs)
-                    | T.null xs
-                    , isPunctuation x -> dropWhile (== Space) r
-                    | isPunctuation x -> Str xs : r
-                  _ -> sfxs
-                _   -> sfxs
-            optargs pdoc sdoc = case (isEmpty pdoc, isEmpty sdoc) of
-                 (True, True ) -> empty
-                 (True, False) -> brackets sdoc
-                 (_   , _    ) -> brackets pdoc <> brackets sdoc
-
-citeArguments :: PandocMonad m
-              => [Inline] -> [Inline] -> Text -> LW m (Doc Text)
-citeArguments p s k = citeArgumentsList (CiteGroup p s [k])
-
--- strip off {} used to define locator in pandoc-citeproc; see #5722
-stripLocatorBraces :: [Inline] -> [Inline]
-stripLocatorBraces = walk go
-  where go (Str xs) = Str $ T.filter (\c -> c /= '{' && c /= '}') xs
-        go x        = x
-
-citationsToBiblatex :: PandocMonad m => [Citation] -> LW m (Doc Text)
-citationsToBiblatex
-            [one]
-  = citeCommand cmd p s k
-    where
-       Citation { citationId = k
-                , citationPrefix = p
-                , citationSuffix = s
-                , citationMode = m
-                } = one
-       cmd = case m of
-                  SuppressAuthor -> "autocite*"
-                  AuthorInText   -> "textcite"
-                  NormalCitation -> "autocite"
-
-citationsToBiblatex (c:cs)
-  | all (\cit -> null (citationPrefix cit) && null (citationSuffix cit)) (c:cs)
-    = do
-      let cmd = case citationMode c of
-                    SuppressAuthor -> "\\autocite*"
-                    AuthorInText   -> "\\textcite"
-                    NormalCitation -> "\\autocite"
-      return $ text cmd <>
-               braces (literal (T.intercalate "," (map citationId (c:cs))))
-  | otherwise
-    = do
-      let cmd = case citationMode c of
-                    SuppressAuthor -> "\\autocites*"
-                    AuthorInText   -> "\\textcites"
-                    NormalCitation -> "\\autocites"
-
-      groups <- mapM citeArgumentsList (reverse (foldl' grouper [] (c:cs)))
-
-      return $ text cmd <> mconcat groups
-
-  where grouper prev cit = case prev of
-         ((CiteGroup oPfx oSfx ids):rest)
-             | null oSfx && null pfx -> CiteGroup oPfx sfx (cid:ids) : rest
-         _ -> CiteGroup pfx sfx [cid] : prev
-         where pfx = citationPrefix cit
-               sfx = citationSuffix cit
-               cid = citationId cit
-
-citationsToBiblatex _ = return empty
-
--- Determine listings language from list of class attributes.
-getListingsLanguage :: [Text] -> Maybe Text
-getListingsLanguage xs
-  = foldr ((<|>) . toListingsLanguage) Nothing xs
-
-mbBraced :: Text -> Text
-mbBraced x = if not (T.all isAlphaNum x)
-                then "{" <> x <> "}"
-                else x
-
 -- Extract a key from divs and spans
 extract :: Text -> Block -> [Text]
 extract key (Div attr _)     = lookKey key attr
@@ -1390,175 +1022,3 @@ extractInline _ _               = []
 -- Look up a key in an attribute and give a list of its values
 lookKey :: Text -> Attr -> [Text]
 lookKey key (_,_,kvs) =  maybe [] T.words $ lookup key kvs
-
--- In environments \Arabic instead of \arabic is used
-toPolyglossiaEnv :: Lang -> (Text, Text)
-toPolyglossiaEnv l =
-  case toPolyglossia l of
-    ("arabic", o) -> ("Arabic", o)
-    x             -> x
-
--- Takes a list of the constituents of a BCP 47 language code and
--- converts it to a Polyglossia (language, options) tuple
--- http://mirrors.ctan.org/macros/latex/contrib/polyglossia/polyglossia.pdf
-toPolyglossia :: Lang -> (Text, Text)
-toPolyglossia (Lang "ar" _ "DZ" _)        = ("arabic", "locale=algeria")
-toPolyglossia (Lang "ar" _ "IQ" _)        = ("arabic", "locale=mashriq")
-toPolyglossia (Lang "ar" _ "JO" _)        = ("arabic", "locale=mashriq")
-toPolyglossia (Lang "ar" _ "LB" _)        = ("arabic", "locale=mashriq")
-toPolyglossia (Lang "ar" _ "LY" _)        = ("arabic", "locale=libya")
-toPolyglossia (Lang "ar" _ "MA" _)        = ("arabic", "locale=morocco")
-toPolyglossia (Lang "ar" _ "MR" _)        = ("arabic", "locale=mauritania")
-toPolyglossia (Lang "ar" _ "PS" _)        = ("arabic", "locale=mashriq")
-toPolyglossia (Lang "ar" _ "SY" _)        = ("arabic", "locale=mashriq")
-toPolyglossia (Lang "ar" _ "TN" _)        = ("arabic", "locale=tunisia")
-toPolyglossia (Lang "de" _ _ vars)
-  | "1901" `elem` vars                    = ("german", "spelling=old")
-toPolyglossia (Lang "de" _ "AT" vars)
-  | "1901" `elem` vars                    = ("german", "variant=austrian, spelling=old")
-toPolyglossia (Lang "de" _ "AT" _)        = ("german", "variant=austrian")
-toPolyglossia (Lang "de" _ "CH" vars)
-  | "1901" `elem` vars                    = ("german", "variant=swiss, spelling=old")
-toPolyglossia (Lang "de" _ "CH" _)        = ("german", "variant=swiss")
-toPolyglossia (Lang "de" _ _ _)           = ("german", "")
-toPolyglossia (Lang "dsb" _ _ _)          = ("lsorbian", "")
-toPolyglossia (Lang "el" _ "polyton" _)   = ("greek",   "variant=poly")
-toPolyglossia (Lang "en" _ "AU" _)        = ("english", "variant=australian")
-toPolyglossia (Lang "en" _ "CA" _)        = ("english", "variant=canadian")
-toPolyglossia (Lang "en" _ "GB" _)        = ("english", "variant=british")
-toPolyglossia (Lang "en" _ "NZ" _)        = ("english", "variant=newzealand")
-toPolyglossia (Lang "en" _ "UK" _)        = ("english", "variant=british")
-toPolyglossia (Lang "en" _ "US" _)        = ("english", "variant=american")
-toPolyglossia (Lang "grc" _ _ _)          = ("greek",   "variant=ancient")
-toPolyglossia (Lang "hsb" _ _  _)         = ("usorbian", "")
-toPolyglossia (Lang "la" _ _ vars)
-  | "x-classic" `elem` vars               = ("latin", "variant=classic")
-toPolyglossia (Lang "pt" _ "BR" _)        = ("portuguese", "variant=brazilian")
-toPolyglossia (Lang "sl" _ _ _)           = ("slovenian", "")
-toPolyglossia x                           = (commonFromBcp47 x, "")
-
--- Takes a list of the constituents of a BCP 47 language code and
--- converts it to a Babel language string.
--- http://mirrors.ctan.org/macros/latex/required/babel/base/babel.pdf
--- List of supported languages (slightly outdated):
--- http://tug.ctan.org/language/hyph-utf8/doc/generic/hyph-utf8/hyphenation.pdf
-toBabel :: Lang -> Text
-toBabel (Lang "de" _ "AT" vars)
-  | "1901" `elem` vars                  = "austrian"
-  | otherwise                           = "naustrian"
-toBabel (Lang "de" _ "CH" vars)
-  | "1901" `elem` vars                  = "swissgerman"
-  | otherwise                           = "nswissgerman"
-toBabel (Lang "de" _ _ vars)
-  | "1901" `elem` vars                  = "german"
-  | otherwise                           = "ngerman"
-toBabel (Lang "dsb" _ _ _)              = "lowersorbian"
-toBabel (Lang "el" _ _ vars)
-  | "polyton" `elem` vars               = "polutonikogreek"
-toBabel (Lang "en" _ "AU" _)            = "australian"
-toBabel (Lang "en" _ "CA" _)            = "canadian"
-toBabel (Lang "en" _ "GB" _)            = "british"
-toBabel (Lang "en" _ "NZ" _)            = "newzealand"
-toBabel (Lang "en" _ "UK" _)            = "british"
-toBabel (Lang "en" _ "US" _)            = "american"
-toBabel (Lang "fr" _ "CA" _)            = "canadien"
-toBabel (Lang "fra" _ _ vars)
-  | "aca" `elem` vars                   = "acadian"
-toBabel (Lang "grc" _ _ _)              = "polutonikogreek"
-toBabel (Lang "hsb" _ _ _)              = "uppersorbian"
-toBabel (Lang "la" _ _ vars)
-  | "x-classic" `elem` vars             = "classiclatin"
-toBabel (Lang "pt" _ "BR" _)            = "brazilian"
-toBabel (Lang "sl" _ _ _)               = "slovene"
-toBabel x                               = commonFromBcp47 x
-
--- Takes a list of the constituents of a BCP 47 language code
--- and converts it to a string shared by Babel and Polyglossia.
--- https://tools.ietf.org/html/bcp47#section-2.1
-commonFromBcp47 :: Lang -> Text
-commonFromBcp47 (Lang "sr" "Cyrl" _ _)          = "serbianc"
-commonFromBcp47 (Lang "zh" "Latn" _ vars)
-  | "pinyin" `elem` vars                        = "pinyin"
-commonFromBcp47 (Lang l _ _ _) = fromIso l
-  where
-    fromIso "af"  = "afrikaans"
-    fromIso "am"  = "amharic"
-    fromIso "ar"  = "arabic"
-    fromIso "as"  = "assamese"
-    fromIso "ast" = "asturian"
-    fromIso "bg"  = "bulgarian"
-    fromIso "bn"  = "bengali"
-    fromIso "bo"  = "tibetan"
-    fromIso "br"  = "breton"
-    fromIso "ca"  = "catalan"
-    fromIso "cy"  = "welsh"
-    fromIso "cs"  = "czech"
-    fromIso "cop" = "coptic"
-    fromIso "da"  = "danish"
-    fromIso "dv"  = "divehi"
-    fromIso "el"  = "greek"
-    fromIso "en"  = "english"
-    fromIso "eo"  = "esperanto"
-    fromIso "es"  = "spanish"
-    fromIso "et"  = "estonian"
-    fromIso "eu"  = "basque"
-    fromIso "fa"  = "farsi"
-    fromIso "fi"  = "finnish"
-    fromIso "fr"  = "french"
-    fromIso "fur" = "friulan"
-    fromIso "ga"  = "irish"
-    fromIso "gd"  = "scottish"
-    fromIso "gez" = "ethiopic"
-    fromIso "gl"  = "galician"
-    fromIso "he"  = "hebrew"
-    fromIso "hi"  = "hindi"
-    fromIso "hr"  = "croatian"
-    fromIso "hu"  = "magyar"
-    fromIso "hy"  = "armenian"
-    fromIso "ia"  = "interlingua"
-    fromIso "id"  = "indonesian"
-    fromIso "ie"  = "interlingua"
-    fromIso "is"  = "icelandic"
-    fromIso "it"  = "italian"
-    fromIso "jp"  = "japanese"
-    fromIso "km"  = "khmer"
-    fromIso "kmr" = "kurmanji"
-    fromIso "kn"  = "kannada"
-    fromIso "ko"  = "korean"
-    fromIso "la"  = "latin"
-    fromIso "lo"  = "lao"
-    fromIso "lt"  = "lithuanian"
-    fromIso "lv"  = "latvian"
-    fromIso "ml"  = "malayalam"
-    fromIso "mn"  = "mongolian"
-    fromIso "mr"  = "marathi"
-    fromIso "nb"  = "norsk"
-    fromIso "nl"  = "dutch"
-    fromIso "nn"  = "nynorsk"
-    fromIso "no"  = "norsk"
-    fromIso "nqo" = "nko"
-    fromIso "oc"  = "occitan"
-    fromIso "pa"  = "panjabi"
-    fromIso "pl"  = "polish"
-    fromIso "pms" = "piedmontese"
-    fromIso "pt"  = "portuguese"
-    fromIso "rm"  = "romansh"
-    fromIso "ro"  = "romanian"
-    fromIso "ru"  = "russian"
-    fromIso "sa"  = "sanskrit"
-    fromIso "se"  = "samin"
-    fromIso "sk"  = "slovak"
-    fromIso "sq"  = "albanian"
-    fromIso "sr"  = "serbian"
-    fromIso "sv"  = "swedish"
-    fromIso "syr" = "syriac"
-    fromIso "ta"  = "tamil"
-    fromIso "te"  = "telugu"
-    fromIso "th"  = "thai"
-    fromIso "ti"  = "ethiopic"
-    fromIso "tk"  = "turkmen"
-    fromIso "tr"  = "turkish"
-    fromIso "uk"  = "ukrainian"
-    fromIso "ur"  = "urdu"
-    fromIso "vi"  = "vietnamese"
-    fromIso _     = ""

@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {- |
    Module      : Text.Pandoc.Writers.Shared
-   Copyright   : Copyright (C) 2013-2021 John MacFarlane
+   Copyright   : Copyright (C) 2013-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -20,6 +20,7 @@ module Text.Pandoc.Writers.Shared (
                      , setField
                      , resetField
                      , defField
+                     , getLang
                      , tagWithAttrs
                      , isDisplayMath
                      , fixDisplayMath
@@ -35,6 +36,8 @@ module Text.Pandoc.Writers.Shared (
                      , toTableOfContents
                      , endsWithPlain
                      , toLegacyTable
+                     , splitSentences
+                     , ensureValidXmlIdentifiers
                      )
 where
 import Safe (lastMay)
@@ -42,11 +45,13 @@ import qualified Data.ByteString.Lazy as BL
 import Data.Maybe (fromMaybe, isNothing)
 import Control.Monad (zipWithM)
 import Data.Aeson (ToJSON (..), encode)
-import Data.Char (chr, ord, isSpace)
+import Data.Char (chr, ord, isSpace, isLetter)
 import Data.List (groupBy, intersperse, transpose, foldl')
+import Data.List.NonEmpty (NonEmpty(..), nonEmpty)
 import Data.Text.Conversions (FromText(..))
 import qualified Data.Map as M
 import qualified Data.Text as T
+import Data.Text (Text)
 import qualified Text.Pandoc.Builder as Builder
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
@@ -117,13 +122,13 @@ metaValueToVal _ inlineWriter (MetaInlines is) = SimpleVal <$> inlineWriter is
 
 
 -- | Retrieve a field value from a template context.
-getField   :: FromContext a b => T.Text -> Context a -> Maybe b
+getField   :: FromContext a b => Text -> Context a -> Maybe b
 getField field (Context m) = M.lookup field m >>= fromVal
 
 -- | Set a field of a template context.  If the field already has a value,
 -- convert it into a list with the new value appended to the old value(s).
 -- This is a utility function to be used in preparing template contexts.
-setField   :: ToContext a b => T.Text -> b -> Context a -> Context a
+setField   :: ToContext a b => Text -> b -> Context a -> Context a
 setField field val (Context m) =
   Context $ M.insertWith combine field (toVal val) m
  where
@@ -133,21 +138,34 @@ setField field val (Context m) =
 -- | Reset a field of a template context.  If the field already has a
 -- value, the new value replaces it.
 -- This is a utility function to be used in preparing template contexts.
-resetField :: ToContext a b => T.Text -> b -> Context a -> Context a
+resetField :: ToContext a b => Text -> b -> Context a -> Context a
 resetField field val (Context m) =
   Context (M.insert field (toVal val) m)
 
 -- | Set a field of a template context if it currently has no value.
 -- If it has a value, do nothing.
 -- This is a utility function to be used in preparing template contexts.
-defField   :: ToContext a b => T.Text -> b -> Context a -> Context a
+defField   :: ToContext a b => Text -> b -> Context a -> Context a
 defField field val (Context m) =
   Context (M.insertWith f field (toVal val) m)
   where
     f _newval oldval = oldval
 
+-- | Get the contents of the `lang` metadata field or variable.
+getLang :: WriterOptions -> Meta -> Maybe Text
+getLang opts meta =
+  case lookupContext "lang" (writerVariables opts) of
+        Just s -> Just s
+        _      ->
+          case lookupMeta "lang" meta of
+               Just (MetaBlocks [Para [Str s]])  -> Just s
+               Just (MetaBlocks [Plain [Str s]]) -> Just s
+               Just (MetaInlines [Str s])        -> Just s
+               Just (MetaString s)               -> Just s
+               _                                 -> Nothing
+
 -- | Produce an HTML tag with the given pandoc attributes.
-tagWithAttrs :: HasChars a => T.Text -> Attr -> Doc a
+tagWithAttrs :: HasChars a => Text -> Attr -> Doc a
 tagWithAttrs tag (ident,classes,kvs) = hsep
   ["<" <> text (T.unpack tag)
   ,if T.null ident
@@ -198,7 +216,7 @@ fixDisplayMath x = x
 
 -- | Converts a Unicode character into the ASCII sequence used to
 -- represent the character in "smart" Markdown.
-unsmartify :: WriterOptions -> T.Text -> T.Text
+unsmartify :: WriterOptions -> Text -> Text
 unsmartify opts = T.concatMap $ \c -> case c of
   '\8217' -> "'"
   '\8230' -> "..."
@@ -224,7 +242,7 @@ gridTable :: (Monad m, HasChars a)
           -> m (Doc a)
 gridTable opts blocksToDoc headless aligns widths headers rows = do
   -- the number of columns will be used in case of even widths
-  let numcols = maximum (length aligns : length widths :
+  let numcols = maximum (length aligns :| length widths :
                            map length (headers:rows))
   let officialWidthsInChars widths' = map (
                         (\x -> if x < 1 then 1 else x) .
@@ -253,8 +271,7 @@ gridTable opts blocksToDoc headless aligns widths headers rows = do
   let handleFullWidths widths' = do
         rawHeaders' <- mapM (blocksToDoc opts) headers
         rawRows' <- mapM (mapM (blocksToDoc opts)) rows
-        let numChars [] = 0
-            numChars xs = maximum . map offset $ xs
+        let numChars = maybe 0 maximum . nonEmpty . map offset
         let minWidthsInChars =
                 map numChars $ transpose (rawHeaders' : rawRows')
         let widthsInChars' = zipWith max
@@ -331,7 +348,7 @@ gridTable opts blocksToDoc headless aligns widths headers rows = do
 
 -- | Retrieve the metadata value for a given @key@
 -- and convert to Bool.
-lookupMetaBool :: T.Text -> Meta -> Bool
+lookupMetaBool :: Text -> Meta -> Bool
 lookupMetaBool key meta =
   case lookupMeta key meta of
       Just (MetaBlocks _)  -> True
@@ -342,7 +359,7 @@ lookupMetaBool key meta =
 
 -- | Retrieve the metadata value for a given @key@
 -- and extract blocks.
-lookupMetaBlocks :: T.Text -> Meta -> [Block]
+lookupMetaBlocks :: Text -> Meta -> [Block]
 lookupMetaBlocks key meta =
   case lookupMeta key meta of
          Just (MetaBlocks bs)   -> bs
@@ -352,7 +369,7 @@ lookupMetaBlocks key meta =
 
 -- | Retrieve the metadata value for a given @key@
 -- and extract inlines.
-lookupMetaInlines :: T.Text -> Meta -> [Inline]
+lookupMetaInlines :: Text -> Meta -> [Inline]
 lookupMetaInlines key meta =
   case lookupMeta key meta of
          Just (MetaString s)           -> [Str s]
@@ -363,7 +380,7 @@ lookupMetaInlines key meta =
 
 -- | Retrieve the metadata value for a given @key@
 -- and convert to String.
-lookupMetaString :: T.Text -> Meta -> T.Text
+lookupMetaString :: Text -> Meta -> Text
 lookupMetaString key meta =
   case lookupMeta key meta of
          Just (MetaString s)    -> s
@@ -380,6 +397,7 @@ toSuperscript '2' = Just '\x00B2'
 toSuperscript '3' = Just '\x00B3'
 toSuperscript '+' = Just '\x207A'
 toSuperscript '-' = Just '\x207B'
+toSuperscript '\x2212' = Just '\x207B' -- unicode minus
 toSuperscript '=' = Just '\x207C'
 toSuperscript '(' = Just '\x207D'
 toSuperscript ')' = Just '\x207E'
@@ -429,7 +447,7 @@ sectionToListItem opts (Div (ident,_,_)
    headerText' = addNumber $ walk (deLink . deNote) ils
    headerLink = if T.null ident
                    then headerText'
-                   else [Link nullAttr headerText' ("#" <> ident, "")]
+                   else [Link ("toc-" <> ident, [], []) headerText' ("#" <> ident, "")]
    listContents = filter (not . null) $ map (sectionToListItem opts) subsecs
 sectionToListItem _ _ = []
 
@@ -439,7 +457,9 @@ endsWithPlain :: [Block] -> Bool
 endsWithPlain xs =
   case lastMay xs of
     Just Plain{} -> True
-    _            -> False
+    Just (BulletList is) -> maybe False endsWithPlain (lastMay is)
+    Just (OrderedList _ is) -> maybe False endsWithPlain (lastMay is)
+    _ -> False
 
 -- | Convert the relevant components of a new-style table (with block
 -- caption, row headers, row and column spans, and so on) to those of
@@ -491,7 +511,7 @@ toLegacyTable (Caption _ cbody) specs thead tbodies tfoot
       = let (h, w, cBody) = getComponents c
             cRowPieces = cBody : replicate (w - 1) mempty
             cPendingPieces = replicate w $ replicate (h - 1) mempty
-            pendingPieces' = dropWhile null pendingPieces
+            pendingPieces' = drop w pendingPieces
             (pendingPieces'', rowPieces) = placeCutCells pendingPieces' cells'
         in (cPendingPieces <> pendingPieces'', cRowPieces <> rowPieces)
       | otherwise = ([], [])
@@ -504,3 +524,69 @@ toLegacyTable (Caption _ cbody) specs thead tbodies tfoot
 
     getComponents (Cell _ _ (RowSpan h) (ColSpan w) body)
       = (h, w, body)
+
+splitSentences :: Doc Text -> Doc Text
+splitSentences = go . toList
+ where
+  go [] = mempty
+  go (Text len t : BreakingSpace : xs) =
+     if isSentenceEnding t
+        then Text len t <> NewLine <> go xs
+        else Text len t <> BreakingSpace <> go xs
+  go (x:xs) = x <> go xs
+
+  toList (Concat (Concat a b) c) = toList (Concat a (Concat b c))
+  toList (Concat a b) = a : toList b
+  toList x = [x]
+
+  isSentenceEnding t =
+    case T.unsnoc t of
+      Just (t',c)
+        | c == '.' || c == '!' || c == '?' -> True
+        | c == ')' || c == ']' || c == '"' || c == '\x201D' ->
+           case T.unsnoc t' of
+             Just (_,d) -> d == '.' || d == '!' || d == '?'
+             _ -> False
+      _ -> False
+
+-- | Ensure that all identifiers start with a letter,
+-- and modify internal links accordingly. (Yes, XML allows an
+-- underscore, but HTML 4 doesn't, so we are more conservative.)
+ensureValidXmlIdentifiers :: Pandoc -> Pandoc
+ensureValidXmlIdentifiers = walk fixLinks . walkAttr fixIdentifiers
+ where
+  fixIdentifiers (ident, classes, kvs) =
+    (case T.uncons ident of
+      Nothing -> ident
+      Just (c, _) | isLetter c -> ident
+      _ -> "id_" <> ident,
+     classes, kvs)
+  needsFixing src =
+    case T.uncons src of
+      Just ('#',t) ->
+        case T.uncons t of
+          Just (c,_) | not (isLetter c) -> Just ("#id_" <> t)
+          _ -> Nothing
+      _ -> Nothing
+  fixLinks (Link attr ils (src, tit))
+    | Just src' <- needsFixing src = Link attr ils (src', tit)
+  fixLinks (Image attr ils (src, tit))
+    | Just src' <- needsFixing src = Image attr ils (src', tit)
+  fixLinks x = x
+
+-- | Walk Pandoc document, modifying attributes.
+walkAttr :: (Attr -> Attr) -> Pandoc -> Pandoc
+walkAttr f = walk goInline . walk goBlock
+ where
+  goInline (Span attr ils) = Span (f attr) ils
+  goInline (Link attr ils target) = Link (f attr) ils target
+  goInline (Image attr ils target) = Image (f attr) ils target
+  goInline (Code attr txt) = Code (f attr) txt
+  goInline x = x
+
+  goBlock (Header lev attr ils) = Header lev (f attr) ils
+  goBlock (CodeBlock attr txt) = CodeBlock (f attr) txt
+  goBlock (Table attr cap colspecs thead tbodies tfoot) =
+    Table (f attr) cap colspecs thead tbodies tfoot
+  goBlock (Div attr bs) = Div (f attr) bs
+  goBlock x = x

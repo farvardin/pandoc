@@ -1,7 +1,5 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 module Tests.Writers.Docx (tests) where
 
-import Prelude
 import Text.Pandoc
 import Test.Tasty
 import Tests.Writers.OOXML
@@ -33,7 +31,8 @@ tests = [ testGroup "inlines"
             "docx/golden/links.docx"
           , docxTest
             "inline image"
-            def
+            def{ writerExtensions =
+                   enableExtension Ext_native_numbering (writerExtensions def) }
             "docx/image_writer_test.native"
             "docx/golden/image.docx"
           , docxTest
@@ -89,6 +88,11 @@ tests = [ testGroup "inlines"
             "docx/lists_multiple_initial.native"
             "docx/golden/lists_multiple_initial.docx"
           , docxTest
+            "lists with div bullets"
+            def
+            "docx/lists_div_bullets.native"
+            "docx/golden/lists_div_bullets.docx"
+          , docxTest
             "definition lists"
             def
             "docx/definition_list.native"
@@ -114,6 +118,11 @@ tests = [ testGroup "inlines"
             "docx/tables.native"
             "docx/golden/tables.docx"
           , docxTest
+            "tables without explicit column widths"
+            def
+            "docx/tables-default-widths.native"
+            "docx/golden/tables-default-widths.docx"
+          , docxTest
             "tables with lists in cells"
             def
             "docx/table_with_list_cell.native"
@@ -123,6 +132,11 @@ tests = [ testGroup "inlines"
             def
             "docx/table_one_row.native"
             "docx/golden/table_one_row.docx"
+          , docxTest
+            "tables separated with RawBlock"
+            def
+            "docx/tables_separated_with_rawblock.native"
+            "docx/golden/tables_separated_with_rawblock.docx"
           , docxTest
             "code block"
             def

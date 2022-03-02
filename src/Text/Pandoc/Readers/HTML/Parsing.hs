@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings     #-}
 {- |
    Module      : Text.Pandoc.Readers.HTML.Parsing
-   Copyright   : Copyright (C) 2006-2021 John MacFarlane
+   Copyright   : Copyright (C) 2006-2022 John MacFarlane
    License     : GNU GPL, version 2 or above
 
    Maintainer  : John MacFarlane <jgm@berkeley.edu>
@@ -30,11 +30,11 @@ module Text.Pandoc.Readers.HTML.Parsing
   )
 where
 
-import Control.Monad (guard, void, mzero)
+import Control.Monad (void, mzero, mplus)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Text.HTML.TagSoup
-  ( Attribute, Tag (..), isTagText, isTagPosition, isTagOpen, isTagClose, (~==) )
+  ( Attribute, Tag (..), isTagPosition, isTagOpen, isTagClose, (~==) )
 import Text.Pandoc.Class.PandocMonad (PandocMonad (..))
 import Text.Pandoc.Definition (Attr)
 import Text.Pandoc.Parsing
@@ -118,9 +118,11 @@ pCloses tagtype = try $ do
        _ -> mzero
 
 pBlank :: PandocMonad m => TagParser m ()
-pBlank = try $ do
-  (TagText str) <- pSatisfy isTagText
-  guard $ T.all isSpace str
+pBlank = void $ pSatisfy isBlank
+ where
+  isBlank (TagText t) = T.all isSpace t
+  isBlank (TagComment _) = True
+  isBlank _ = False
 
 pLocation :: PandocMonad m => TagParser m ()
 pLocation = do
@@ -161,10 +163,12 @@ _ `closes` "html" = False
 "li" `closes` "li" = True
 "th" `closes` t | t `elem` ["th","td"] = True
 "td" `closes` t | t `elem` ["th","td"] = True
-"tr" `closes` t | t `elem` ["th","td","tr"] = True
+"tr" `closes` t | t `elem` ["th","td","tr","colgroup"] = True
 "dd" `closes` t | t `elem` ["dt", "dd"] = True
 "dt" `closes` t | t `elem` ["dt","dd"] = True
 "rt" `closes` t | t `elem` ["rb", "rt", "rtc"] = True
+"col" `closes` "col" = True
+"colgroup" `closes` "col" = True
 "optgroup" `closes` "optgroup" = True
 "optgroup" `closes` "option" = True
 "option" `closes` "option" = True
@@ -216,9 +220,10 @@ maybeFromAttrib _ _ = Nothing
 
 mkAttr :: [(Text, Text)] -> Attr
 mkAttr attr = (attribsId, attribsClasses, attribsKV)
-  where attribsId = fromMaybe "" $ lookup "id" attr
+  where attribsId = fromMaybe "" $ lookup "id" attr `mplus` lookup "name" attr
         attribsClasses = T.words (fromMaybe "" $ lookup "class" attr) <> epubTypes
-        attribsKV = filter (\(k,_) -> k /= "class" && k /= "id") attr
+        attribsKV = filter (\(k,_) -> k /= "class" && k /= "id" && k /= "name")
+                           attr
         epubTypes = T.words $ fromMaybe "" $ lookup "epub:type" attr
 
 toAttr :: [(Text, Text)] -> Attr

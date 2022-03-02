@@ -2,7 +2,7 @@ version: "2.1"
 jobs:
   build:
     macos:
-      xcode: 9.4.1
+      xcode: 11.1.0
     environment:
       HOMEBREW_NO_AUTO_UPDATE: 1
     steps:
@@ -14,7 +14,9 @@ jobs:
           - stack-dependencies-{{ checksum "stack.yaml" }}
     - run:
         name: Install stack
-        command: stack --version || (curl -sSL https://get.haskellstack.org/ | sh -s - -f)
+        command: |
+          brew install ghc
+          brew install haskell-stack
     - run:
         name: Resolve/Update Dependencies
         command: stack --no-terminal setup
