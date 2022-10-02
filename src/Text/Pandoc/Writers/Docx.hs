@@ -63,6 +63,7 @@ import Text.TeXMath
 import Text.Pandoc.Writers.OOXML
 import Text.Pandoc.XML.Light as XML
 import Data.Generics (mkT, everywhere)
+import Text.Collate.Lang (Lang(..))
 
 squashProps :: EnvProps -> [Element]
 squashProps (EnvProps Nothing es) = es
@@ -153,16 +154,33 @@ writeDocx opts doc = do
   let addLang :: Element -> Element
       addLang = case mblang of
                   Nothing -> id
-                  Just l  -> everywhere (mkT (go (renderLang l)))
+                  Just l  -> everywhere (mkT (go l))
         where
-          go :: Text -> Element -> Element
-          go l e'
-            | qName (elName e') == "lang"
-                = e'{ elAttribs = map (setvalattr l) $ elAttribs e' }
-            | otherwise = e'
+          go :: Lang -> Element -> Element
+          go lang e'
+           | qName (elName e') == "lang"
+             = if isEastAsianLang lang
+                  then e'{ elAttribs =
+                             map (setattr "eastAsia" (renderLang lang)) $
+                             elAttribs e' }
+                  else
+                    if isBidiLang lang
+                       then e'{ elAttribs =
+                                 map (setattr "bidi" (renderLang lang)) $
+                                 elAttribs e' }
+                       else e'{ elAttribs =
+                                 map (setattr "val" (renderLang lang)) $
+                                 elAttribs e' }
+           | otherwise = e'
 
-          setvalattr l (XML.Attr qn@(QName "val" _ _) _) = XML.Attr qn l
-          setvalattr _ x                                 = x
+          setattr attrname l (XML.Attr qn@(QName s _ _) _)
+            | s == attrname  = XML.Attr qn l
+          setattr _ _ x      = x
+
+          isEastAsianLang Lang{ langLanguage = lang } =
+             lang == "zh" || lang == "jp" || lang == "ko"
+          isBidiLang Lang{ langLanguage = lang } =
+             lang == "he" || lang == "ar"
 
   let stylepath = "word/styles.xml"
   styledoc <- addLang <$> parseXml refArchive distArchive stylepath
@@ -823,8 +841,11 @@ blockToOpenXML' opts (Div (ident,_classes,kvs) bs) = do
   let bibmod = if ident == "refs"
                   then withParaPropM (pStyleM "Bibliography")
                   else id
+  let langmod = case lookup "lang" kvs of
+                  Nothing -> id
+                  Just lang -> local (\env -> env{envLang = Just lang})
   header <- dirmod $ stylemod $ blocksToOpenXML opts hs
-  contents <- dirmod $ bibmod $ stylemod $ blocksToOpenXML opts bs'
+  contents <- dirmod $ bibmod $ stylemod $ langmod $ blocksToOpenXML opts bs'
   wrapBookmark ident $ header <> contents
 blockToOpenXML' opts (Header lev (ident,_,kvs) lst) = do
   setFirstPara
@@ -930,10 +951,15 @@ blockToOpenXML' _ HorizontalRule = do
     $ mknode "v:rect" [("style","width:0;height:1.5pt"),
                        ("o:hralign","center"),
                        ("o:hrstd","t"),("o:hr","t")] () ]
-blockToOpenXML' opts (Table attr caption colspecs thead tbodies tfoot) =
-  tableToOpenXML opts
-                 (blocksToOpenXML opts)
+blockToOpenXML' opts (Table attr caption colspecs thead tbodies tfoot) = do
+  -- Remove extra paragraph indentation due to list items (#5947).
+  -- This means that tables in lists will not be indented, but it
+  -- avoids unwanted indentation in each cell.
+  content <- tableToOpenXML opts
+              (local (\env -> env{ envListLevel = -1 }) . blocksToOpenXML opts)
                  (Grid.toTable attr caption colspecs thead tbodies tfoot)
+  let (tableId, _, _) = attr
+  wrapBookmark tableId content
 blockToOpenXML' opts el
   | BulletList lst <- el = addOpenXMLList BulletMarker lst
   | OrderedList (start, numstyle, numdelim) lst <- el
@@ -1013,7 +1039,12 @@ asList = local $ \env -> env{ envListLevel = envListLevel env + 1 }
 getTextProps :: (PandocMonad m) => WS m [Element]
 getTextProps = do
   props <- asks envTextProperties
-  let squashed = squashProps props
+  mblang <- asks envLang
+  let langnode = case mblang of
+                   Nothing -> mempty
+                   Just l  -> EnvProps Nothing
+                               [mknode "w:lang" [("w:val", l)] ()]
+  let squashed = squashProps (props <> langnode)
   return [mknode "w:rPr" [] squashed | (not . null) squashed]
 
 withTextProp :: PandocMonad m => Element -> WS m a -> WS m a
@@ -1148,8 +1179,11 @@ inlineToOpenXML' opts (Span (ident,classes,kvs) ils) = do
                    return [Elem $ mknode "w:del"
                              (("w:id", tshow delId) : changeAuthorDate) x]
                else return id
-  contents <- insmod $ delmod $ dirmod $ stylemod $ pmod
-                     $ inlinesToOpenXML opts ils
+  let langmod = case lookup "lang" kvs of
+                  Nothing -> id
+                  Just lang -> local (\env -> env{envLang = Just lang})
+  contents <- insmod $ delmod $ dirmod $ stylemod $ pmod $
+              langmod $ inlinesToOpenXML opts ils
   wrapBookmark ident contents
 inlineToOpenXML' opts (Strong lst) =
   withTextProp (mknode "w:b" [] ()) $

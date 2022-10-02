@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE BangPatterns        #-}
 {- |
    Module      : Text.Pandoc.Writers.Markdown
    Copyright   : Copyright (C) 2006-2022 John MacFarlane
@@ -23,12 +24,13 @@ module Text.Pandoc.Writers.Markdown (
 import Control.Monad.Reader
 import Control.Monad.State.Strict
 import Data.Default
-import Data.List (intersperse, sortOn, transpose)
+import Data.List (intersperse, sortOn)
 import Data.List.NonEmpty (nonEmpty, NonEmpty(..))
 import qualified Data.Map as M
 import Data.Maybe (fromMaybe, mapMaybe, isNothing)
 import qualified Data.Set as Set
 import Data.Text (Text)
+import Data.Char (isSpace)
 import qualified Data.Text as T
 import Text.HTML.TagSoup (Tag (..), isTagText, parseTags)
 import Text.Pandoc.Class.PandocMonad (PandocMonad, report)
@@ -47,6 +49,7 @@ import Text.Pandoc.Writers.Markdown.Inline (inlineListToMarkdown,
                                             linkAttributes,
                                             attrsToMarkdown,
                                             attrsToMarkua)
+import Text.Pandoc.Writers.Markdown.Table (pipeTable, pandocTable)
 import Text.Pandoc.Writers.Markdown.Types (MarkdownVariant(..),
                                            WriterState(..),
                                            WriterEnv(..),
@@ -79,14 +82,18 @@ writeCommonMark opts document =
                    -- properly.
                    enableExtension Ext_all_symbols_escapable $
                    enableExtension Ext_intraword_underscores $
-                     writerExtensions opts }
+                     writerExtensions opts ,
+                writerWrapText =
+                  if isEnabled Ext_hard_line_breaks opts
+                     then WrapNone
+                     else writerWrapText opts }
 
 -- | Convert Pandoc to Markua.
 writeMarkua :: PandocMonad m => WriterOptions -> Pandoc -> m Text
 writeMarkua opts document =
   evalMD (pandocToMarkdown opts' document) def{ envVariant = Markua } def
  where
-  opts' = opts{   writerExtensions =
+  opts' = opts{ writerExtensions =
                   enableExtension Ext_hard_line_breaks $
                   enableExtension Ext_pipe_tables $
                   -- required for fancy list enumerators
@@ -98,7 +105,11 @@ writeMarkua opts document =
                   enableExtension Ext_definition_lists $
                   enableExtension Ext_smart $
                   enableExtension Ext_footnotes
-                    mempty }
+                    mempty ,
+                writerWrapText =
+                  if isEnabled Ext_hard_line_breaks opts
+                     then WrapNone
+                     else writerWrapText opts }
 
 
 pandocTitleBlock :: Doc Text -> [Doc Text] -> Doc Text -> Doc Text
@@ -439,6 +450,8 @@ blockToMarkdown' opts b@(RawBlock f str) = do
     Commonmark
       | f `elem` ["gfm", "commonmark", "commonmark_x", "markdown"]
          -> return $ literal str <> literal "\n"
+      | f `elem` ["html", "html5", "html4"]
+         -> return $ literal (removeBlankLinesInHTML str) <> literal "\n"
     Markdown
       | f `elem` ["markdown", "markdown_github", "markdown_phpextra",
                   "markdown_mmd", "markdown_strict"]
@@ -622,7 +635,7 @@ blockToMarkdown' opts t@(Table _ blkCapt specs thead tbody tfoot) = do
                 (id,) <$> pipeTable opts (all null headers) aligns' widths'
                            rawHeaders rawRows
             | isEnabled Ext_raw_html opts -> fmap (id,) $
-                   literal <$>
+                   literal . removeBlankLinesInHTML <$>
                    writeHtml5String opts{ writerTemplate = Nothing } (Pandoc nullMeta [t])
             | otherwise -> return (id, literal "[TABLE]")
   return $ nst (tbl $$ caption'') $$ blankline
@@ -670,102 +683,6 @@ addMarkdownAttribute s =
                                  x /= "markdown"]
        _ -> s
 
-pipeTable :: PandocMonad m
-          => WriterOptions
-          -> Bool -> [Alignment] -> [Double] -> [Doc Text] -> [[Doc Text]]
-          -> MD m (Doc Text)
-pipeTable opts headless aligns widths rawHeaders rawRows = do
-  let sp = literal " "
-  let blockFor AlignLeft   x y = lblock (x + 2) (sp <> y) <> lblock 0 empty
-      blockFor AlignCenter x y = cblock (x + 2) (sp <> y <> sp) <> lblock 0 empty
-      blockFor AlignRight  x y = rblock (x + 2) (y <> sp) <> lblock 0 empty
-      blockFor _           x y = lblock (x + 2) (sp <> y) <> lblock 0 empty
-  let contentWidths = map (max 3 . maybe 3 maximum . nonEmpty . map offset) $
-                       transpose (rawHeaders : rawRows)
-  let colwidth = writerColumns opts
-  let numcols = length contentWidths
-  let maxwidth = sum contentWidths
-  variant <- asks envVariant
-  let pipeWidths = if variant == Markdown &&
-                      not (all (== 0) widths) &&
-                      maxwidth + (numcols + 1) > colwidth
-                      then map
-                            (floor . (* fromIntegral (colwidth - (numcols +1))))
-                            widths
-                      else contentWidths
-  let torow cs = nowrap $ literal "|" <>
-                    hcat (intersperse (literal "|") $
-                          zipWith3 blockFor aligns contentWidths (map chomp cs))
-                    <> literal "|"
-  let toborder a w = literal $ case a of
-                          AlignLeft    -> ":" <> T.replicate (w + 1) "-"
-                          AlignCenter  -> ":" <> T.replicate w "-" <> ":"
-                          AlignRight   -> T.replicate (w + 1) "-" <> ":"
-                          AlignDefault -> T.replicate (w + 2) "-"
-  -- note:  pipe tables can't completely lack a
-  -- header; for a headerless table, we need a header of empty cells.
-  -- see jgm/pandoc#1996.
-  let header = if headless
-                  then torow (replicate (length aligns) empty)
-                  else torow rawHeaders
-  let border = nowrap $ literal "|" <> hcat (intersperse (literal "|") $
-                        zipWith toborder aligns pipeWidths) <> literal "|"
-  let body   = vcat $ map torow rawRows
-  return $ header $$ border $$ body
-
-pandocTable :: PandocMonad m
-            => WriterOptions -> Bool -> Bool -> [Alignment] -> [Double]
-            -> [Doc Text] -> [[Doc Text]] -> MD m (Doc Text)
-pandocTable opts multiline headless aligns widths rawHeaders rawRows = do
-  let isSimple = all (==0) widths
-  let alignHeader alignment = case alignment of
-                                AlignLeft    -> lblock
-                                AlignCenter  -> cblock
-                                AlignRight   -> rblock
-                                AlignDefault -> lblock
-  -- Number of characters per column necessary to output every cell
-  -- without requiring a line break.
-  -- The @+2@ is needed for specifying the alignment.
-  let numChars    = (+ 2) . maybe 0 maximum . nonEmpty . map offset
-  -- Number of characters per column necessary to output every cell
-  -- without requiring a line break *inside a word*.
-  -- The @+2@ is needed for specifying the alignment.
-  let minNumChars = (+ 2) . maybe 0 maximum . nonEmpty . map minOffset
-  let columns = transpose (rawHeaders : rawRows)
-  -- minimal column width without wrapping a single word
-  let relWidth w col =
-         max (floor $ fromIntegral (writerColumns opts - 1) * w)
-             (if writerWrapText opts == WrapAuto
-                 then minNumChars col
-                 else numChars col)
-  let widthsInChars
-        | isSimple  = map numChars columns
-        | otherwise = zipWith relWidth widths columns
-  let makeRow = hcat . intersperse (lblock 1 (literal " ")) .
-                   zipWith3 alignHeader aligns widthsInChars
-  let rows' = map makeRow rawRows
-  let head' = makeRow rawHeaders
-  let underline = mconcat $ intersperse (literal " ") $
-                  map (\width -> literal (T.replicate width "-")) widthsInChars
-  let border
-        | multiline = literal (T.replicate (sum widthsInChars +
-                        length widthsInChars - 1) "-")
-        | headless  = underline
-        | otherwise = empty
-  let head'' = if headless
-                  then empty
-                  else border <> cr <> head'
-  let body = if multiline
-                then vsep rows' $$
-                     if length rows' < 2
-                        then blankline -- #4578
-                        else empty
-                else vcat rows'
-  let bottom = if headless
-                  then underline
-                  else border
-  return $ head'' $$ underline $$ body $$ bottom
-
 itemEndsWithTightList :: [Block] -> Bool
 itemEndsWithTightList bs =
   case bs of
@@ -779,15 +696,15 @@ bulletListItemToMarkdown opts bs = do
   variant <- asks envVariant
   let exts = writerExtensions opts
   contents <- blockListToMarkdown opts $ taskListItemToAscii exts bs
-  let sps = T.replicate (writerTabStop opts - 2) " "
   let start = case variant of
-              Markua -> literal "* "
-              _      -> literal $ "- " <> sps
+              Markua -> "* "
+              Commonmark -> "- "
+              _ -> "- " <> T.replicate (writerTabStop opts - 2) " "
   -- remove trailing blank line if item ends with a tight list
   let contents' = if itemEndsWithTightList bs
                      then chomp contents <> cr
                      else contents
-  return $ hang (writerTabStop opts) start contents'
+  return $ hang (T.length start) (literal start) contents'
 
 -- | Convert ordered list item (a list of blocks) to markdown.
 orderedListItemToMarkdown :: PandocMonad m
@@ -909,3 +826,12 @@ lineBreakToSpace :: Inline -> Inline
 lineBreakToSpace LineBreak = Space
 lineBreakToSpace SoftBreak = Space
 lineBreakToSpace x         = x
+
+removeBlankLinesInHTML :: Text -> Text
+removeBlankLinesInHTML = T.pack . go False . T.unpack
+  where go _ [] = []
+        go True ('\n':cs) = "&#10;" <> go False cs
+        go False ('\n':cs) = '\n' : go True cs
+        go !afternewline (!c:cs)
+          | isSpace c = c : go afternewline cs
+          | otherwise = c : go False cs

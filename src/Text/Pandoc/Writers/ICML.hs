@@ -333,8 +333,9 @@ blockToICML opts style (Header lvl (ident, cls, _) lst) =
                    else ""
   in parStyle opts stl ident lst
 blockToICML _ _ HorizontalRule = return empty -- we could insert a page break instead
-blockToICML opts style (Table _ blkCapt specs thead tbody tfoot) =
-  let (caption, aligns, widths, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
+blockToICML opts style (Table attr blkCapt specs thead tbody tfoot) =
+  let (caption, aligns, widths, headers, rows) =
+        toLegacyTable blkCapt specs thead tbody tfoot
       style' = tableName : style
       noHeader  = all null headers
       nrHeaders = if noHeader
@@ -370,8 +371,10 @@ blockToICML opts style (Table _ blkCapt specs thead tbody tfoot) =
             [("SingleColumnWidth",tshow $ 500 * w) | w > 0]
       let tupToDoc tup = selfClosingTag "Column" $ ("Name",tshow $ fst tup) : colWidths (snd tup)
       let colDescs = vcat $ zipWith (curry tupToDoc) [0..nrCols-1] widths
+      let (_,_,kvs) = attr
+      let dynamicStyle = fromMaybe "Table" (lookup dynamicStyleKey kvs)
       let tableDoc = return $ inTags True "Table" [
-                         ("AppliedTableStyle","TableStyle/Table")
+                         ("AppliedTableStyle","TableStyle/" <> dynamicStyle)
                        , ("HeaderRowCount", nrHeaders)
                        , ("BodyRowCount", tshow nrRows)
                        , ("ColumnCount", tshow nrCols)
@@ -483,7 +486,7 @@ inlineToICML opts style _ (Span (ident, _, kvs) lst) =
   in  inlinesToICML opts (dynamicStyle <> style) ident lst
 -- ident will be the id of the span, that we need to use down in the hyperlink setter
 --  if T.null ident
---     then 
+--     then
 --     else do
 
 -- | Convert a list of block elements to an ICML footnote.
@@ -556,7 +559,7 @@ makeLinkDest ident cont = vcat [
 -- | Create the markup for the content (incl. named destinations)
 -- |  NOTE: since we have no easy way to get actual named dests, we just create them for any short content blocks
 makeContent :: Text -> Doc Text -> Doc Text
-makeContent ident cont 
+makeContent ident cont
               | isEmpty cont = empty
               | not (Text.null ident) = makeLinkDest ident cont
               | otherwise = inTagsSimple "Content" $ flush cont

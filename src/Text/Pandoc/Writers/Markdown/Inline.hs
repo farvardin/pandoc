@@ -68,8 +68,16 @@ escapeText opts = T.pack . go' . T.unpack
   go [] = []
   go (c:cs) =
     case c of
-       _ | c `elem` ['\\','`','*','_','[',']'] ->
-              '\\':c:go cs
+       '[' -> '\\':c:go cs
+       ']' -> '\\':c:go cs
+       '`' -> '\\':c:go cs
+       '*' -> '\\':c:go cs
+       '_' -> '\\':c:go cs
+       '\\' | isEnabled Ext_raw_tex opts -> '\\':c:go cs
+            | otherwise ->
+              case cs of -- don't escape \ if we don't have to:
+                d:_ | isAlphaNum d -> c:go cs
+                _ -> '\\':c:go cs
        '>' | isEnabled Ext_all_symbols_escapable opts -> '\\':'>':go cs
            | otherwise -> "&gt;" ++ go cs
        '<' | isEnabled Ext_all_symbols_escapable opts -> '\\':'<':go cs
@@ -109,8 +117,8 @@ attrsToMarkdown attribs = braces $ hsep [attribId, attribClasses, attribKeys]
               attribClasses = case attribs of
                                 (_,[],_) -> empty
                                 (_,cs,_) -> hsep $
-                                            map (escAttr . ("."<>))
-                                            cs
+                                            map (escAttr . ("."<>)) $
+                                            filter (not . T.null) cs
               attribKeys = case attribs of
                                 (_,_,[]) -> empty
                                 (_,_,ks) -> hsep $

@@ -54,7 +54,8 @@ import qualified Data.Text as T
 import qualified Data.Map as M
 import qualified Data.ByteString.Char8 as B8
 import Text.Pandoc.Definition (Meta(..), MetaValue(..))
-import Data.Aeson (defaultOptions, Options(..), Result(..), fromJSON, camelTo2)
+import Data.Aeson (defaultOptions, Options(..), Result(..), camelTo2,
+                   genericToJSON, fromJSON)
 import Data.Aeson.TH (deriveJSON)
 import Control.Applicative ((<|>))
 import Data.Yaml
@@ -96,7 +97,8 @@ data Opt = Opt
     , optNumberOffset          :: [Int]   -- ^ Starting number for sections
     , optSectionDivs           :: Bool    -- ^ Put sections in div tags in HTML
     , optIncremental           :: Bool    -- ^ Use incremental lists in Slidy/Slideous/S5
-    , optSelfContained         :: Bool    -- ^ Make HTML accessible offline
+    , optSelfContained         :: Bool    -- ^ Make HTML accessible offline (deprecated)
+    , optEmbedResources        :: Bool    -- ^ Make HTML accessible offline
     , optHtmlQTags             :: Bool    -- ^ Use <q> tags in HTML
     , optHighlightStyle        :: Maybe Text -- ^ Style to use for highlighted code
     , optSyntaxDefinitions     :: [FilePath]  -- ^ xml syntax defs to load
@@ -124,7 +126,6 @@ data Opt = Opt
     , optFilters               :: [Filter] -- ^ Filters to apply
     , optEmailObfuscation      :: ObfuscationMethod
     , optIdentifierPrefix      :: Text
-    , optStripEmptyParagraphs  :: Bool -- ^ Strip empty paragraphs
     , optIndentedCodeClasses   :: [Text] -- ^ Default classes for indented code blocks
     , optDataDir               :: Maybe FilePath
     , optCiteMethod            :: CiteMethod -- ^ Method to output cites
@@ -133,6 +134,7 @@ data Opt = Opt
     , optPdfEngineOpts         :: [String]   -- ^ Flags to pass to the engine
     , optSlideLevel            :: Maybe Int  -- ^ Header level that creates slides
     , optSetextHeaders         :: Bool       -- ^ Use atx headers for markdown level 1-2
+    , optListTables            :: Bool       -- ^ Use list tables for RST
     , optAscii                 :: Bool       -- ^ Prefer ascii output
     , optDefaultImageExtension :: Text       -- ^ Default image extension
     , optExtractMedia          :: Maybe FilePath -- ^ Path to extract embedded media
@@ -155,8 +157,90 @@ data Opt = Opt
     , optSandbox               :: Bool
     } deriving (Generic, Show)
 
-$(deriveJSON
-   defaultOptions{ fieldLabelModifier = camelTo2 '-' . drop 3 } ''Opt)
+instance FromJSON Opt where
+   parseJSON = withObject "Opt" $ \o ->
+     Opt
+       <$> o .:? "tab-stop" .!= optTabStop defaultOpts
+       <*> o .:? "preserve-tabs" .!= optPreserveTabs defaultOpts
+       <*> o .:? "standalone" .!= optStandalone defaultOpts
+       <*> o .:? "from"
+       <*> o .:? "to"
+       <*> o .:? "table-of-contents" .!= optTableOfContents defaultOpts
+       <*> o .:? "shift-heading-level-by" .!= optShiftHeadingLevelBy defaultOpts
+       <*> o .:? "template"
+       <*> o .:? "variables" .!= optVariables defaultOpts
+       <*> o .:? "metadata" .!= optMetadata defaultOpts
+       <*> o .:? "metadata-files" .!= optMetadataFiles defaultOpts
+       <*> o .:? "output-file"
+       <*> o .:? "input-files"
+       <*> o .:? "number-sections" .!= optNumberSections defaultOpts
+       <*> o .:? "number-offset" .!= optNumberOffset defaultOpts
+       <*> o .:? "section-divs" .!= optSectionDivs defaultOpts
+       <*> o .:? "incremental" .!= optIncremental defaultOpts
+       <*> o .:? "self-contained" .!= optSelfContained defaultOpts
+       <*> o .:? "embed-resources" .!= optEmbedResources defaultOpts
+       <*> o .:? "html-q-tags" .!= optHtmlQTags defaultOpts
+       <*> o .:? "highlight-style"
+       <*> o .:? "syntax-definitions" .!= optSyntaxDefinitions defaultOpts
+       <*> o .:? "top-level-division" .!= optTopLevelDivision defaultOpts
+       <*> o .:? "html-math-method" .!= optHTMLMathMethod defaultOpts
+       <*> o .:? "abbreviations"
+       <*> o .:? "reference-doc"
+       <*> o .:? "epub-subdirectory" .!= optEpubSubdirectory defaultOpts
+       <*> o .:? "epub-metadata"
+       <*> o .:? "epub-fonts" .!= optEpubFonts defaultOpts
+       <*> o .:? "epub-chapter-level" .!= optEpubChapterLevel defaultOpts
+       <*> o .:? "epub-cover-image"
+       <*> o .:? "toc-depth" .!= optTOCDepth defaultOpts
+       <*> o .:? "dump-args" .!= optDumpArgs defaultOpts
+       <*> o .:? "ignore-args" .!= optIgnoreArgs defaultOpts
+       <*> o .:? "verbosity" .!= optVerbosity defaultOpts
+       <*> o .:? "trace" .!= optTrace defaultOpts
+       <*> o .:? "log-file"
+       <*> o .:? "fail-if-warnings" .!= optFailIfWarnings defaultOpts
+       <*> o .:? "reference-links" .!= optReferenceLinks defaultOpts
+       <*> o .:? "reference-location" .!= optReferenceLocation defaultOpts
+       <*> o .:? "dpi" .!= optDpi defaultOpts
+       <*> o .:? "wrap" .!= optWrap defaultOpts
+       <*> o .:? "columns" .!= optColumns defaultOpts
+       <*> o .:? "filters" .!= optFilters defaultOpts
+       <*> o .:? "email-obfuscation" .!= optEmailObfuscation defaultOpts
+       <*> o .:? "identifier-prefix" .!= optIdentifierPrefix defaultOpts
+       <*> o .:? "indented-code-classes" .!= optIndentedCodeClasses defaultOpts
+       <*> o .:? "data-dir"
+       <*> o .:? "cite-method" .!= optCiteMethod defaultOpts
+       <*> o .:? "listings" .!= optListings defaultOpts
+       <*> o .:? "pdf-engine"
+       <*> o .:? "pdf-engine-opts" .!= optPdfEngineOpts defaultOpts
+       <*> o .:? "slide-level"
+       <*> o .:? "setext-headers" .!= optSetextHeaders defaultOpts
+       <*> o .:? "list-tables" .!= optListTables defaultOpts
+       <*> o .:? "ascii" .!= optAscii defaultOpts
+       <*> o .:? "default-image-extension" .!= optDefaultImageExtension defaultOpts
+       <*> o .:? "extract-media"
+       <*> o .:? "track-changes" .!= optTrackChanges defaultOpts
+       <*> o .:? "file-scope" .!= optFileScope defaultOpts
+       <*> o .:? "title-prefix" .!= optTitlePrefix defaultOpts
+       <*> o .:? "css" .!= optCss defaultOpts
+       <*> o .:? "ipynb-output" .!= optIpynbOutput defaultOpts
+       <*> o .:? "include-before-body" .!= optIncludeBeforeBody defaultOpts
+       <*> o .:? "include-after-body" .!= optIncludeAfterBody defaultOpts
+       <*> o .:? "include-in-header" .!= optIncludeInHeader defaultOpts
+       <*> o .:? "resource-path" .!= optResourcePath defaultOpts
+       <*> o .:? "request-headers" .!= optRequestHeaders defaultOpts
+       <*> o .:? "no-check-certificate" .!= optNoCheckCertificate defaultOpts
+       <*> o .:? "eol" .!= optEol defaultOpts
+       <*> o .:? "strip-comments" .!= optStripComments defaultOpts
+       <*> o .:? "csl"
+       <*> o .:? "bibliography" .!= optBibliography defaultOpts
+       <*> o .:? "citation-abbreviations"
+       <*> o .:? "sandbox" .!= optSandbox defaultOpts
+
+instance ToJSON Opt where
+ toJSON = genericToJSON defaultOptions{
+                                 fieldLabelModifier = camelTo2 '-' . drop 3,
+                                 omitNothingFields = True }
+
 
 instance FromJSON (Opt -> Opt) where
   parseJSON (Object m) =
@@ -214,6 +298,8 @@ resolveVarsInOpt
     , optCSL                   = oCSL
     , optBibliography          = oBibliography
     , optCitationAbbreviations = oCitationAbbreviations
+    , optPdfEngine             = oPdfEngine
+    , optHighlightStyle        = oHighlightStyle
     }
   = do
       oTemplate' <- mapM resolveVars oTemplate
@@ -238,6 +324,8 @@ resolveVarsInOpt
       oCSL' <- mapM resolveVars oCSL
       oBibliography' <- mapM resolveVars oBibliography
       oCitationAbbreviations' <- mapM resolveVars oCitationAbbreviations
+      oPdfEngine' <- mapM resolveVars oPdfEngine
+      oHighlightStyle' <- mapM (fmap T.pack . resolveVars . T.unpack) oHighlightStyle
       return opt{ optTemplate              = oTemplate'
                 , optMetadataFiles         = oMetadataFiles'
                 , optOutputFile            = oOutputFile'
@@ -260,6 +348,8 @@ resolveVarsInOpt
                 , optCSL                   = oCSL'
                 , optBibliography          = oBibliography'
                 , optCitationAbbreviations = oCitationAbbreviations'
+                , optPdfEngine             = oPdfEngine'
+                , optHighlightStyle        = oHighlightStyle'
                 }
 
  where
@@ -409,6 +499,8 @@ doOpt (k,v) = do
       parseJSON v >>= \x -> return (\o -> o{ optIncremental = x })
     "self-contained" ->
       parseJSON v >>= \x -> return (\o -> o{ optSelfContained = x })
+    "embed-resources" ->
+      parseJSON v >>= \x -> return (\o -> o{ optEmbedResources = x })
     "html-q-tags" ->
       parseJSON v >>= \x -> return (\o -> o{ optHtmlQTags = x })
     "highlight-style" ->
@@ -485,8 +577,6 @@ doOpt (k,v) = do
     "identifier-prefix" ->
       parseJSON v >>= \x ->
              return (\o -> o{ optIdentifierPrefix = x })
-    "strip-empty-paragraphs" ->
-      parseJSON v >>= \x -> return (\o -> o{ optStripEmptyParagraphs = x })
     "indented-code-classes" ->
       parseJSON v >>= \x ->
              return (\o -> o{ optIndentedCodeClasses = x })
@@ -509,14 +599,14 @@ doOpt (k,v) = do
              return (\o -> o{ optPdfEngineOpts = [unpack x] }))
     "slide-level" ->
       parseJSON v >>= \x -> return (\o -> o{ optSlideLevel = x })
-    "atx-headers" ->
-      parseJSON v >>= \x -> return (\o -> o{ optSetextHeaders = not x })
     "markdown-headings" ->
       parseJSON v >>= \x -> return (\o ->
         case T.toLower x of
           "atx"    -> o{ optSetextHeaders = False }
           "setext" -> o{ optSetextHeaders = True }
           _        -> o)
+    "list-tables" ->
+      parseJSON v >>= \x -> return (\o -> o{ optListTables = x })
     "ascii" ->
       parseJSON v >>= \x -> return (\o -> o{ optAscii = x })
     "default-image-extension" ->
@@ -616,6 +706,7 @@ defaultOpts = Opt
     , optSectionDivs           = False
     , optIncremental           = False
     , optSelfContained         = False
+    , optEmbedResources        = False
     , optHtmlQTags             = False
     , optHighlightStyle        = Just "pygments"
     , optSyntaxDefinitions     = []
@@ -643,7 +734,6 @@ defaultOpts = Opt
     , optFilters               = []
     , optEmailObfuscation      = NoObfuscation
     , optIdentifierPrefix      = ""
-    , optStripEmptyParagraphs  = False
     , optIndentedCodeClasses   = []
     , optDataDir               = Nothing
     , optCiteMethod            = Citeproc
@@ -652,6 +742,7 @@ defaultOpts = Opt
     , optPdfEngineOpts         = []
     , optSlideLevel            = Nothing
     , optSetextHeaders         = False
+    , optListTables            = False
     , optAscii                 = False
     , optDefaultImageExtension = ""
     , optExtractMedia          = Nothing

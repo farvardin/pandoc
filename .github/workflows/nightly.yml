@@ -4,28 +4,30 @@ on:
   schedule:
     - cron: '53 7 * * *'
 
+permissions:
+  contents: read
+
 jobs:
   linux:
 
-    runs-on: ubuntu-18.04
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
-    - name: Install recent cabal/ghc
-      uses: haskell/actions/setup@v1
-      with:
-        ghc-version: '8.10.7'
-        cabal-version: '3.2'
+    - name: Install cabal/ghc
+      run: |
+        ghcup install ghc --set 8.10.7
+        ghcup install cabal --set 3.2
 
     - name: Install dependencies
       run: |
           ghc --version
           cabal --version
           cabal v2-update
-          cabal v2-build --dependencies-only
+          cabal v2-build --dependencies-only -fembed_data_files -fnightly pandoc-cli
     - name: Build
       run: |
-          cabal v2-install
+          cabal v2-install -fembed_data_files -fnightly pandoc-cli
           strip $HOME/.cabal/bin/pandoc
     - name: Install artifact
       run: |
@@ -34,7 +36,7 @@ jobs:
           cp $HOME/.cabal/bin/pandoc ${ARTIFACTS}/
           cp COPYRIGHT ${ARTIFACTS}/
           echo "Built from ${GITHUB_SHA}" > ${ARTIFACTS}/README.nightly.txt
-    - uses: actions/upload-artifact@master
+    - uses: actions/upload-artifact@v3
       with:
         name: nightly-linux
         path: nightly-linux
@@ -44,48 +46,47 @@ jobs:
     runs-on: windows-2019
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: Install dependencies
       run: |
           stack update
-          stack build --dependencies-only pandoc
+          stack build --dependencies-only pandoc-cli
     - name: Build artifacts
       shell: cmd
       run: |
           for /f %%a in ('powershell -Command "Get-Date -format yyyy-MM-dd"') do set THEDATE=%%a
           set ARTIFACTS=%CD%\nightly-windows\pandoc-nightly-windows-%THEDATE%
           mkdir %ARTIFACTS%
-          stack build pandoc
+          stack build --flag pandoc-cli:nightly --flag pandoc:embed_data_files pandoc-cli
           forfiles /P .\.stack-work\install /M pandoc*.exe /S /C "cmd /C copy @path %%ARTIFACTS%%"
           copy COPYRIGHT %ARTIFACTS%
           ren %ARTIFACTS%\COPYRIGHT COPYRIGHT.txt
           echo Built from %GITHUB_SHA% > %ARTIFACTS%\README.nightly.txt
-    - uses: actions/upload-artifact@master
+    - uses: actions/upload-artifact@v3
       with:
         name: nightly-windows
         path: nightly-windows
 
   macos:
 
-    runs-on: macOS-10.15
+    runs-on: macos-11
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
     - name: Install dependencies
       run: |
           stack update
-          stack build --dependencies-only pandoc
+          stack build --dependencies-only pandoc-cli
     - name: Build artifacts
       run: |
           export ARTIFACTS=nightly-macos/pandoc-nightly-macos-$(date +%Y-%m-%d)
           mkdir -p ${ARTIFACTS}
-          stack build pandoc
+          stack build --flag pandoc:nightly --flag pandoc:embed_data_files pandoc-cli
           for f in $(find .stack-work/install -name 'pandoc*' -perm +001 -type f); do cp $f ${ARTIFACTS}/; done
           mv ${ARTIFACTS}/pandoc ${ARTIFACTS}/pandoc
           cp COPYRIGHT ${ARTIFACTS}/
           echo "Built from ${GITHUB_SHA}" > ${ARTIFACTS}/README.nightly.txt
-    - uses: actions/upload-artifact@master
+    - uses: actions/upload-artifact@v3
       with:
         name: nightly-macos
         path: nightly-macos
-

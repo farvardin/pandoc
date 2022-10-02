@@ -40,17 +40,18 @@ tableEnvironments blocks inline =
 hline :: PandocMonad m => LP m ()
 hline = try $ do
   spaces
-  controlSeq "hline" <|>
-    (controlSeq "cline" <* braced) <|>
-    -- booktabs rules:
-    controlSeq "toprule" <|>
-    controlSeq "bottomrule" <|>
-    controlSeq "midrule" <|>
-    controlSeq "endhead" <|>
-    controlSeq "endfirsthead"
-  spaces
+  hasParenArg <-
+      (False <$ controlSeq "hline") <|>
+      (False <$ controlSeq "cline") <|>
+      (True <$ controlSeq "cmidrule") <|>
+      -- booktabs rules:
+      (True <$ controlSeq "toprule") <|>
+      (True <$ controlSeq "bottomrule") <|>
+      (True <$ controlSeq "midrule") <|>
+      (True <$ controlSeq "endhead") <|>
+      (True <$ controlSeq "endfirsthead")
   optional rawopt
-  return ()
+  when hasParenArg $ void $ optional (parenWrapped (() <$ singleChar))
 
 lbreak :: PandocMonad m => LP m Tok
 lbreak = (controlSeq "\\" <|> controlSeq "tabularnewline")
@@ -62,10 +63,11 @@ amp = symbol '&'
 -- Split a Word into individual Symbols (for parseAligns)
 splitWordTok :: PandocMonad m => LP m ()
 splitWordTok = do
-  inp <- getInput
+  TokStream macrosExpanded inp <- getInput
   case inp of
        (Tok spos Word t : rest) ->
-         setInput $ map (Tok spos Symbol . T.singleton) (T.unpack t) <> rest
+         setInput $ TokStream macrosExpanded
+                  $ map (Tok spos Symbol . T.singleton) (T.unpack t) <> rest
        _ -> return ()
 
 parseAligns :: PandocMonad m => LP m [(Alignment, ColWidth, ([Tok], [Tok]))]
@@ -108,8 +110,9 @@ parseAligns = try $ do
         spaces
         spec <- braced
         case safeRead ds of
-             Just n  ->
-               getInput >>= setInput . (mconcat (replicate n spec) ++)
+             Just n  -> do
+               TokStream _ ts <- getInput
+               setInput $ TokStream False (mconcat (replicate n spec) ++ ts)
              Nothing -> Prelude.fail $ "Could not parse " <> T.unpack ds <> " as number"
   bgroup
   spaces

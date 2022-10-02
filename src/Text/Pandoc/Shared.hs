@@ -40,7 +40,6 @@ module Text.Pandoc.Shared (
                      toRomanNumeral,
                      escapeURI,
                      tabFilter,
-                     crFilter,
                      -- * Date/time
                      normalizeDate,
                      -- * Pandoc block and inline list processing
@@ -48,7 +47,6 @@ module Text.Pandoc.Shared (
                      extractSpaces,
                      removeFormatting,
                      deNote,
-                     deLink,
                      stringify,
                      capitalize,
                      compactify,
@@ -57,6 +55,7 @@ module Text.Pandoc.Shared (
                      makeSections,
                      uniqueIdent,
                      inlineListToIdentifier,
+                     textToIdentifier,
                      isHeaderBlock,
                      headerShift,
                      stripEmptyParagraphs,
@@ -70,6 +69,7 @@ module Text.Pandoc.Shared (
                      eastAsianLineBreakFilter,
                      htmlSpanLikeElements,
                      filterIpynbOutput,
+                     formatCode,
                      -- * TagSoup HTML handling
                      renderTags',
                      -- * File handling
@@ -93,7 +93,8 @@ module Text.Pandoc.Shared (
                      -- * User data directory
                      defaultUserDataDir,
                      -- * Version
-                     pandocVersion
+                     pandocVersion,
+                     pandocVersionText
                     ) where
 
 import Codec.Archive.Zip
@@ -105,14 +106,15 @@ import qualified Data.Bifunctor as Bifunctor
 import Data.Char (isAlpha, isLower, isSpace, isUpper, toLower, isAlphaNum,
                   generalCategory, GeneralCategory(NonSpacingMark,
                   SpacingCombiningMark, EnclosingMark, ConnectorPunctuation))
-import Data.List (find, intercalate, intersperse, sortOn, foldl')
+import Data.Containers.ListUtils (nubOrd)
+import Data.List (find, intercalate, intersperse, sortOn, foldl', groupBy)
 import qualified Data.Map as M
 import Data.Maybe (mapMaybe, fromMaybe)
 import Data.Monoid (Any (..))
 import Data.Sequence (ViewL (..), ViewR (..), viewl, viewr)
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import Data.Version (showVersion)
+import Data.Version (Version, showVersion)
 import Network.URI (URI (uriScheme), escapeURIString, parseURI)
 import Paths_pandoc (version)
 import System.Directory
@@ -131,8 +133,12 @@ import Text.DocLayout (charWidth)
 import Text.Pandoc.Walk
 
 -- | Version number of pandoc library.
-pandocVersion :: T.Text
-pandocVersion = T.pack $ showVersion version
+pandocVersion :: Version
+pandocVersion = version
+
+-- | Text representation of the library's version number.
+pandocVersionText :: T.Text
+pandocVersionText = T.pack $ showVersion version
 
 --
 -- List processing
@@ -152,6 +158,9 @@ splitTextBy isSep t
   | otherwise = let (first, rest) = T.break isSep t
                 in  first : splitTextBy isSep (T.dropWhile isSep rest)
 
+-- | Split text at the given widths. Note that the break points are
+-- /not/ indices but text widths, which will be different for East Asian
+-- characters, emojis, etc.
 splitTextByIndices :: [Int] -> T.Text -> [T.Text]
 splitTextByIndices ns = splitTextByRelIndices (zipWith (-) ns (0:ns)) . T.unpack
  where
@@ -160,22 +169,27 @@ splitTextByIndices ns = splitTextByRelIndices (zipWith (-) ns (0:ns)) . T.unpack
     let (first, rest) = splitAt' x cs
      in T.pack first : splitTextByRelIndices xs rest
 
--- Note: don't replace this with T.splitAt, which is not sensitive
+-- | Returns a pair whose first element is a prefix of @t@ and that has
+-- width @n@, and whose second is the remainder of the string.
+--
+-- Note: Do *not* replace this with 'T.splitAt', which is not sensitive
 -- to character widths!
-splitAt' :: Int -> [Char] -> ([Char],[Char])
+splitAt' :: Int {-^ n -} -> [Char] {-^ t -} -> ([Char],[Char])
 splitAt' _ []          = ([],[])
 splitAt' n xs | n <= 0 = ([],xs)
 splitAt' n (x:xs)      = (x:ys,zs)
   where (ys,zs) = splitAt' (n - charWidth x) xs
 
+-- | Remove duplicates from a list.
 ordNub :: (Ord a) => [a] -> [a]
-ordNub l = go Set.empty l
-  where
-    go _ [] = []
-    go s (x:xs) = if x `Set.member` s then go s xs
-                                      else x : go (Set.insert x s) xs
+ordNub = nubOrd
+{-# INLINE ordNub #-}
 
-findM :: forall m t a. (Monad m, Foldable t) => (a -> m Bool) -> t a -> m (Maybe a)
+-- | Returns the first element in a foldable structure for that the
+-- monadic predicate holds true, and @Nothing@ if no such element
+-- exists.
+findM :: forall m t a. (Monad m, Foldable t)
+      => (a -> m Bool) -> t a -> m (Maybe a)
 findM p = foldr go (pure Nothing)
   where
     go :: a -> m (Maybe a) -> m (Maybe a)
@@ -191,6 +205,7 @@ findM p = foldr go (pure Nothing)
 inquotes :: T.Text -> T.Text
 inquotes txt = T.cons '\"' (T.snoc txt '\"')
 
+-- | Like @'show'@, but returns a 'T.Text' instead of a 'String'.
 tshow :: Show a => a -> T.Text
 tshow = T.pack . show
 
@@ -198,6 +213,7 @@ tshow = T.pack . show
 elemText :: Char -> T.Text -> Bool
 elemText c = T.any (== c)
 
+{-# DEPRECATED notElemText "Use T.all (/= c)" #-}
 -- | @True@ exactly when the @Char@ does not appear in the @Text@.
 notElemText :: Char -> T.Text -> Bool
 notElemText c = T.all (/= c)
@@ -206,6 +222,8 @@ notElemText c = T.all (/= c)
 stripTrailingNewlines :: T.Text -> T.Text
 stripTrailingNewlines = T.dropWhileEnd (== '\n')
 
+-- | Returns 'True' for an ASCII whitespace character, viz. space,
+-- carriage return, newline, and horizontal tab.
 isWS :: Char -> Bool
 isWS ' '  = True
 isWS '\r' = True
@@ -302,11 +320,6 @@ tabFilter tabStop = T.unlines . map go . T.lines
                        (tabStop - (T.length s1 `mod` tabStop)) (T.pack " ")
                        <> go (T.drop 1 s2)
 
-{-# DEPRECATED crFilter "readers filter crs automatically" #-}
--- | Strip out DOS line endings.
-crFilter :: T.Text -> T.Text
-crFilter = T.filter (/= '\r')
-
 --
 -- Date/time
 --
@@ -317,6 +330,7 @@ crFilter = T.filter (/= '\r')
 normalizeDate :: T.Text -> Maybe T.Text
 normalizeDate = fmap T.pack . normalizeDate' . T.unpack
 
+-- | Like @'normalizeDate'@, but acts on 'String' instead of 'T.Text'.
 normalizeDate' :: String -> Maybe String
 normalizeDate' s = fmap (formatTime defaultTimeLocale "%F")
   (msum $ map (\fs -> parsetimeWith fs s >>= rejectBadYear) formats :: Maybe Day)
@@ -382,13 +396,10 @@ removeFormatting = query go . walk (deNote . deQuote)
         go LineBreak  = [Space]
         go _          = []
 
+-- | Replaces 'Note' elements with empty strings.
 deNote :: Inline -> Inline
 deNote (Note _) = Str ""
 deNote x        = x
-
-deLink :: Inline -> Inline
-deLink (Link _ ils _) = Span nullAttr ils
-deLink x              = x
 
 -- | Convert pandoc structure to a string with formatting removed.
 -- Footnotes are skipped (since we don't want their contents in link
@@ -412,6 +423,8 @@ stringify = query go . walk fixInlines
         fixInlines (q@Quoted{}) = deQuote q
         fixInlines x = x
 
+-- | Unwrap 'Quoted' inline elements, enclosing the contents with
+-- English-style Unicode quotes instead.
 deQuote :: Inline -> Inline
 deQuote (Quoted SingleQuote xs) =
   Span ("",[],[]) (Str "\8216" : xs ++ [Str "\8217"])
@@ -478,12 +491,10 @@ isPara :: Block -> Bool
 isPara (Para _) = True
 isPara _        = False
 
--- | Convert Pandoc inline list to plain text identifier.  HTML
--- identifiers must start with a letter, and may contain only
--- letters, digits, and the characters _-.
+-- | Convert Pandoc inline list to plain text identifier.
 inlineListToIdentifier :: Extensions -> [Inline] -> T.Text
 inlineListToIdentifier exts =
-  dropNonLetter . filterAscii . toIdent . stringify . walk unEmojify
+  textToIdentifier exts . stringify . walk unEmojify
   where
     unEmojify :: [Inline] -> [Inline]
     unEmojify
@@ -492,6 +503,12 @@ inlineListToIdentifier exts =
       | otherwise = id
     unEmoji (Span ("",["emoji"],[("data-emoji",ename)]) _) = Str ename
     unEmoji x = x
+
+-- | Convert string to plain text identifier.
+textToIdentifier :: Extensions -> T.Text -> T.Text
+textToIdentifier exts =
+  dropNonLetter . filterAscii . toIdent
+  where
     dropNonLetter
       | extensionEnabled Ext_gfm_auto_identifiers exts = id
       | otherwise = T.dropWhile (not . isAlpha)
@@ -557,7 +574,8 @@ makeSections numbering mbBaseLevel bs =
                Header level' _ _ -> level' > level
                _                 -> True) ys
       , "column" `notElem` dclasses
-      , "columns" `notElem` dclasses = do
+      , "columns" `notElem` dclasses
+      , "fragment" `notElem` dclasses = do
     inner <- go (Header level hattr title':ys)
     rest <- go xs
     return $
@@ -570,6 +588,7 @@ makeSections numbering mbBaseLevel bs =
     xs' <- go xs
     rest' <- go rest
     return $ Div attr xs' : rest'
+  go (Null:xs) = go xs
   go (x:xs) = (x :) <$> go xs
   go [] = return []
 
@@ -665,6 +684,8 @@ taskListItemToAscii = handleTaskListItem toMd
   where
     toMd (Str "☐" : Space : is) = rawMd "[ ]" : Space : is
     toMd (Str "☒" : Space : is) = rawMd "[x]" : Space : is
+    toMd (Str "❏" : Space : is) = rawMd "[ ]" : Space : is
+    toMd (Str "✓" : Space : is) = rawMd "[x]" : Space : is
     toMd is = is
     rawMd = RawInline (Format "markdown")
 
@@ -692,6 +713,7 @@ addMetaField key val (Meta meta) =
         tolist (MetaList ys) = ys
         tolist y             = [y]
 
+{-# DEPRECATED makeMeta "Use addMetaField directly" #-}
 -- | Create 'Meta' from old-style title, authors, date.  This is
 -- provided to ease the transition from the old API.
 makeMeta :: [Inline] -> [[Inline]] -> [Inline] -> Meta
@@ -759,6 +781,26 @@ filterIpynbOutput mode = walk go
                     | otherwise = ""
         go x = x
 
+-- | Reformat 'Inlines' as code, putting the stringlike parts in 'Code'
+-- elements while bringing other inline formatting outside.
+-- The idea is that e.g. `[Str "a",Space,Strong [Str "b"]]` should turn
+-- into `[Code ("",[],[]) "a ", Strong [Code ("",[],[]) "b"]]`.
+-- This helps work around the limitation that pandoc's Code element can
+-- only contain string content (see issue #7525).
+formatCode :: Attr -> Inlines -> Inlines
+formatCode attr = B.fromList . walk fmt . B.toList
+  where
+    isPlaintext (Str _) = True
+    isPlaintext Space = True
+    isPlaintext SoftBreak = True
+    isPlaintext (Quoted _ _) = True
+    isPlaintext _ = False
+    fmt = concatMap go . groupBy (\a b -> isPlaintext a && isPlaintext b)
+      where
+        go xs
+          | all isPlaintext xs = B.toList $ B.codeWith attr $ stringify xs
+          | otherwise = xs
+
 --
 -- TagSoup HTML handling
 --
@@ -813,7 +855,7 @@ collapseFilePath = Posix.joinPath . reverse . foldl' go [] . splitDirectories
     isSingleton _   = Nothing
     checkPathSeperator = fmap isPathSeparator . isSingleton
 
--- Convert the path part of a file: URI to a regular path.
+-- | Converts the path part of a file: URI to a regular path.
 -- On windows, @/c:/foo@ should be @c:/foo@.
 -- On linux, @/foo@ should be @/foo@.
 uriPathToPath :: T.Text -> FilePath

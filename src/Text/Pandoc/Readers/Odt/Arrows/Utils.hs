@@ -21,6 +21,7 @@ with an equivalent return value.
 -- We export everything
 module Text.Pandoc.Readers.Odt.Arrows.Utils where
 
+import Prelude hiding (Applicative(..))
 import Control.Arrow
 import Control.Monad (join)
 
@@ -183,12 +184,6 @@ a >>?! f = a >>> right f
           -> FallibleArrow a x f c
 a >>?% f = a >>?^ uncurry f
 
----
-(^>>?%) :: (ArrowChoice a)
-          => (x -> Either f (b,b'))
-          -> (b -> b' -> c)
-          -> FallibleArrow a x f c
-a ^>>?% f = arr a >>?^ uncurry f
 
 ---
 (>>?%?) :: (ArrowChoice a)
@@ -199,7 +194,7 @@ a >>?%? f = a >>?^? uncurry f
 
 infixr 1  >>?,  >>?^,  >>?^?
 infixr 1 ^>>?, >>?!
-infixr 1 >>?%, ^>>?%, >>?%?
+infixr 1 >>?%, >>?%?
 
 -- | An arrow version of a short-circuit (<|>)
 ifFailedDo :: (ArrowChoice a)

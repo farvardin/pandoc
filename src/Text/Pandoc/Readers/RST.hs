@@ -720,8 +720,12 @@ directive' = do
         "aafig" -> do
           let attribs = (name, ["aafig"], map (second trimr) fields)
           return $ B.codeBlockWith attribs $ stripTrailingNewlines body
-        "math" -> return $ B.para $ mconcat $ map B.displayMath
-                         $ toChunks $ top <> "\n\n" <> body
+        "math" -> return $ B.para
+                  $ (case mkAttr name classes fields of
+                       attr | attr == nullAttr -> id
+                            | otherwise        -> B.spanWith attr)
+                  $ mconcat $ map B.displayMath
+                  $ toChunks $ top <> "\n\n" <> body
         "figure" -> do
            (caption, legend) <- parseFromString' extractCaption body'
            let src = escapeURI $ trim top
@@ -841,8 +845,8 @@ csvTableDirective top fields rawcsv = do
                                 _            -> ','
               , csvQuote = case trim <$> lookup "quote" fields of
                                 Just (T.unpack -> [c])
-                                  -> c
-                                _ -> '"'
+                                  -> Just c
+                                _ -> Just '"'
               , csvEscape = case trim <$> lookup "escape" fields of
                                 Just (T.unpack -> [c])
                                   -> Just c
@@ -1026,6 +1030,14 @@ codeblock ident classes fields lang rmTrailingNewlines body =
                 ++ case lookup "number-lines" fields of
                      Just v | not (T.null v) -> [("startFrom", v)]
                      _ -> []
+
+-- | Creates element attributes from a name, list of classes, and fields.
+-- Removes fields named @name@, @id@, or @class@.
+mkAttr :: Text -> [Text] -> [(Text, Text)] -> Attr
+mkAttr ident classes fields = (ident, classes, fields')
+  where fields' = [(k, v') | (k, v) <- fields
+                           , let v' = trimr v
+                           , k /= "name", k /= "id", k /= "class"]
 
 ---
 --- note block
@@ -1240,9 +1252,6 @@ headerBlock = do
 --  - multiline support
 --  - ensure that rightmost column span does not need to reach end
 --  - require at least 2 columns
---
--- Grid tables TODO:
---  - column spans
 
 dashedLine :: Monad m => Char -> ParserT Sources st m (Int, Int)
 dashedLine ch = do
@@ -1332,14 +1341,12 @@ simpleTable headless = do
   rewidth = fmap $ fmap $ const ColWidthDefault
 
 gridTable :: PandocMonad m
-          => Bool -- ^ Headerless table
-          -> RSTParser m Blocks
-gridTable headerless = runIdentity <$>
-  gridTableWith (Identity <$> parseBlocks) headerless
+          => RSTParser m Blocks
+gridTable = runIdentity <$>
+  gridTableWith (Identity <$> parseBlocks)
 
 table :: PandocMonad m => RSTParser m Blocks
-table = gridTable False <|> simpleTable False <|>
-        gridTable True  <|> simpleTable True <?> "table"
+table = gridTable <|> simpleTable False <|> simpleTable True <?> "table"
 
 --
 -- inline

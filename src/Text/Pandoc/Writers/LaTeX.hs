@@ -87,8 +87,10 @@ pandocToLaTeX options (Pandoc meta blocks) = do
               (fmap chomp . inlineListToLaTeX)
               meta
   let chaptersClasses = ["memoir","book","report","scrreprt","scrreport",
-                        "scrbook","extreport","extbook","tufte-book"]
-  let frontmatterClasses = ["memoir","book","scrbook","extbook","tufte-book"]
+                        "scrbook","extreport","extbook","tufte-book",
+                        "ctexrep","ctexbook","elegantbook"]
+  let frontmatterClasses = ["memoir","book","scrbook","extbook","tufte-book",
+                           "ctexbook","elegantbook"]
   -- these have \frontmatter etc.
   beamer <- gets stBeamer
   let documentClass =
@@ -163,6 +165,7 @@ pandocToLaTeX options (Pandoc meta blocks) = do
                   defField "numbersections" (writerNumberSections options) $
                   defField "lhs" (stLHS st) $
                   defField "graphics" (stGraphics st) $
+                  defField "svg" (stSVG st) $
                   defField "has-chapters" (stHasChapters st) $
                   defField "has-frontmatter" (documentClass `elem` frontmatterClasses) $
                   defField "listings" (writerListings options || stLHS st) $
@@ -206,9 +209,9 @@ pandocToLaTeX options (Pandoc meta blocks) = do
           maybe id (\l -> defField "lang"
                       (literal $ renderLang l)) mblang
         $ maybe id (\l -> defField "babel-lang"
-                      (literal $ toBabel l)) mblang
+                      (literal l)) (mblang >>= toBabel)
         $ defField "babel-otherlangs"
-             (map (literal . toBabel) docLangs)
+             (map literal $ mapMaybe toBabel docLangs)
         $ defField "latex-dir-rtl"
            ((render Nothing <$> getField "dir" context) ==
                Just ("rtl" :: Text)) context
@@ -287,10 +290,11 @@ blockToLaTeX (Div (identifier,"slide":dclasses,dkvs)
   let frameoptions = ["allowdisplaybreaks", "allowframebreaks", "fragile",
                       "b", "c", "t", "environment", "s", "squeeze",
                       "label", "plain", "shrink", "standout",
-                      "noframenumbering"]
+                      "noframenumbering", "containsverbatim"]
   let optionslist = ["fragile" | fragile
                                , isNothing (lookup "fragile" kvs)
-                               , "fragile" `notElem` classes] ++
+                               , "fragile" `notElem` classes
+                               , "containsverbatim" `notElem` classes] ++
                     [k | k <- classes, k `elem` frameoptions] ++
                     [k <> "=" <> v | (k,v) <- kvs, k `elem` frameoptions] ++
                     [v | ("frameoptions", v) <- kvs]
@@ -735,10 +739,9 @@ inlineToLaTeX (Span (id',classes,kvs) ils) = do
       kvToCmd ("dir","ltr") = Just "LR"
       kvToCmd _ = Nothing
       langCmds =
-        case lang of
-           Just lng -> let l = toBabel lng
-                       in  ["foreignlanguage{" <> l <> "}"]
-           Nothing  -> []
+        case lang >>= toBabel of
+           Just l  -> ["foreignlanguage{" <> l <> "}"]
+           Nothing -> []
   let cmds = mapMaybe classToCmd classes ++ mapMaybe kvToCmd kvs ++ langCmds
   contents <- inlineListToLaTeX ils
   return $
@@ -930,9 +933,11 @@ inlineToLaTeX il@(Image _ _ (src, _))
   | Just _ <- T.stripPrefix "data:" src = do
       report $ InlineNotRendered il
       return empty
-inlineToLaTeX (Image attr _ (source, _)) = do
+inlineToLaTeX (Image attr@(_,_,kvs) _ (source, _)) = do
   setEmptyLine False
-  modify $ \s -> s{ stGraphics = True }
+  let isSVG = ".svg" `T.isSuffixOf` source || ".SVG" `T.isSuffixOf` source
+  modify $ \s -> s{ stGraphics = True
+                  , stSVG = stSVG s || isSVG }
   opts <- gets stOptions
   let showDim dir = let d = text (show dir) <> "="
                     in case dimension dir attr of
@@ -953,18 +958,22 @@ inlineToLaTeX (Image attr _ (source, _)) = do
                                 Height | isJust (dimension Width attr) ->
                                   [d <> "\\textheight"]
                                 _ -> []
-      dimList = showDim Width <> showDim Height
-      dims = if null dimList
-                then empty
-                else brackets $ mconcat (intersperse "," dimList)
+      optList = showDim Width <> showDim Height <>
+                maybe [] (\x -> ["page=" <> literal x]) (lookup "page" kvs) <>
+                maybe [] (\x -> ["trim=" <> literal x]) (lookup "trim" kvs) <>
+                maybe [] (\_ -> ["clip"]) (lookup "clip" kvs)
+      options = if null optList
+                   then empty
+                   else brackets $ mconcat (intersperse "," optList)
       source' = if isURI source
                    then source
                    else T.pack $ unEscapeString $ T.unpack source
   source'' <- stringToLaTeX URLString source'
   inHeading <- gets stInHeading
   return $
-    (if inHeading then "\\protect\\includegraphics" else "\\includegraphics") <>
-    dims <> braces (literal source'')
+    (if inHeading then "\\protect" else "") <>
+      (if isSVG then "\\includesvg" else "\\includegraphics") <>
+    options <> braces (literal source'')
 inlineToLaTeX (Note contents) = do
   setEmptyLine False
   externalNotes <- gets stExternalNotes

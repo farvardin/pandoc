@@ -18,7 +18,7 @@ Org-Mode:  <http://orgmode.org>
 module Text.Pandoc.Writers.Org (writeOrg) where
 import Control.Monad.State.Strict
 import Data.Char (isAlphaNum, isDigit)
-import Data.List (intersect, intersperse, partition, transpose)
+import Data.List (intersperse, partition, transpose)
 import Data.List.NonEmpty (nonEmpty)
 import Data.Text (Text)
 import qualified Data.Text as T
@@ -105,6 +105,14 @@ blockToOrg :: PandocMonad m
            => Block         -- ^ Block element
            -> Org m (Doc Text)
 blockToOrg Null = return empty
+blockToOrg (Div (_, ["cell", "code"], _) (CodeBlock attr t : bs)) = do
+  -- ipynb code cell
+  let (ident, classes, kvs) = attr
+  blockListToOrg (CodeBlock (ident, classes ++ ["code"], kvs) t : bs)
+blockToOrg (Div (_, ["output", "execute_result"], _) [CodeBlock _attr t]) = do
+  -- ipynb code result
+  return $ "#+RESULTS:" $$
+    (prefixed ": " . vcat . map literal $ T.split (== '\n') t)
 blockToOrg (Div attr@(ident,_,_) bs) = do
   opts <- gets stOptions
   -- Strip off bibliography if citations enabled
@@ -146,24 +154,34 @@ blockToOrg (Header level attr inlines) = do
   let headerStr = text $ if level > 999 then " " else replicate level '*'
   let drawerStr = if attr == nullAttr
                   then empty
-                  else cr <> nest (level + 1) (propertiesDrawer attr)
+                  else cr <> propertiesDrawer attr
   return $ headerStr <> " " <> contents <> drawerStr <> cr
-blockToOrg (CodeBlock (_,classes,kvs) str) = do
+blockToOrg (CodeBlock (ident,classes,kvs) str) = do
+  let name = if T.null ident
+             then empty
+             else literal $ "#+name: " <> ident
   let startnum = maybe "" (\x -> " " <> trimr x) $ lookup "startFrom" kvs
   let numberlines = if "numberLines" `elem` classes
                       then if "continuedSourceBlock" `elem` classes
                              then " +n" <> startnum
                              else " -n" <> startnum
                       else ""
-  let at = map pandocLangToOrg classes `intersect` orgLangIdentifiers
-  let (beg, end) = case at of
-                      []    -> ("#+begin_example" <> numberlines, "#+end_example")
-                      (x:_) -> ("#+begin_src " <> x <> numberlines, "#+end_src")
-  return $ literal beg $$ literal str $$ text end $$ blankline
+  let lang = case filter (`notElem` ["example","code"]) classes of
+        []  -> Nothing
+        l:_ -> if "code" `elem` classes    -- check for ipynb code cell
+               then Just ("jupyter-" <> pandocLangToOrg l)
+               else Just (pandocLangToOrg l)
+  let args = mconcat $
+             [ " :" <> k <> " " <> v
+             | (k, v) <- kvs, k `notElem` ["startFrom", "org-language"]]
+  let (beg, end) = case lang of
+        Nothing -> ("#+begin_example" <> numberlines, "#+end_example")
+        Just x  -> ("#+begin_src " <> x <> numberlines <> args, "#+end_src")
+  return $ name $$ literal beg $$ literal str $$ literal end $$ blankline
 blockToOrg (BlockQuote blocks) = do
   contents <- blockListToOrg blocks
   return $ blankline $$ "#+begin_quote" $$
-           nest 2 contents $$ "#+end_quote" $$ blankline
+           contents $$ "#+end_quote" $$ blankline
 blockToOrg (Table _ blkCapt specs thead tbody tfoot) =  do
   let (caption', _, _, headers, rows) = toLegacyTable blkCapt specs thead tbody tfoot
   caption'' <- inlineListToOrg caption'
@@ -508,53 +526,6 @@ pandocLangToOrg cs =
     "r"          -> "R"
     "bash"       -> "sh"
     _            -> cs
-
--- | List of language identifiers recognized by org-mode.
--- See <https://orgmode.org/manual/Languages.html>.
-orgLangIdentifiers :: [Text]
-orgLangIdentifiers =
-  [ "asymptote"
-  , "lisp"
-  , "awk"
-  , "lua"
-  , "C"
-  , "matlab"
-  , "C++"
-  , "mscgen"
-  , "clojure"
-  , "ocaml"
-  , "css"
-  , "octave"
-  , "D"
-  , "org"
-  , "ditaa"
-  , "oz"
-  , "calc"
-  , "perl"
-  , "emacs-lisp"
-  , "plantuml"
-  , "eshell"
-  , "processing"
-  , "fortran"
-  , "python"
-  , "gnuplot"
-  , "R"
-  , "screen"
-  , "ruby"
-  , "dot"
-  , "sass"
-  , "haskell"
-  , "scheme"
-  , "java"
-  , "sed"
-  , "js"
-  , "sh"
-  , "latex"
-  , "sql"
-  , "ledger"
-  , "sqlite"
-  , "lilypond"
-  , "vala" ]
 
 -- taken from oc-csl.el in the org source tree:
 locmap :: LocatorMap

@@ -117,7 +117,8 @@ simpleCiteArgs inline = try $ do
     -- now parse the toks as inlines
     st <- getState
     parsed <- lift $
-      runParserT (mconcat <$> many inline) st "bracketed option" toks
+      runParserT (mconcat <$> many inline) st "bracketed option"
+       (TokStream False toks)
     case parsed of
       Right result -> return result
       Left e       -> throwError $ PandocParsecError (toSources toks) e
@@ -207,4 +208,3 @@ complexNatbibCitation inline mode = try $ do
 inNote :: Inlines -> Inlines
 inNote ils =
   note $ para $ ils <> str "."
-

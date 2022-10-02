@@ -37,9 +37,9 @@ import System.IO (stdout)
 import Text.Pandoc
 import Text.Pandoc.App.FormatHeuristics (formatFromFilePaths)
 import Text.Pandoc.App.Opt (Opt (..))
-import Text.Pandoc.App.CommandLineOptions (engines, lookupHighlightStyle,
-                                          setVariable)
-import Text.Pandoc.Writers.Custom (writeCustom)
+import Text.Pandoc.App.CommandLineOptions (engines, setVariable)
+import Text.Pandoc.Highlighting (lookupHighlightingStyle)
+import Text.Pandoc.Scripting (ScriptingEngine (engineWriteCustom))
 import qualified Text.Pandoc.UTF8 as UTF8
 
 readUtf8File :: PandocMonad m => FilePath -> m T.Text
@@ -55,8 +55,9 @@ data OutputSettings m = OutputSettings
   }
 
 -- | Get output settings from command line options.
-optToOutputSettings :: (PandocMonad m, MonadIO m) => Opt -> m (OutputSettings m)
-optToOutputSettings opts = do
+optToOutputSettings :: (PandocMonad m, MonadIO m)
+                    => ScriptingEngine -> Opt -> m (OutputSettings m)
+optToOutputSettings scriptingEngine opts = do
   let outputFile = fromMaybe "-" (optOutputFile opts)
 
   when (optDumpArgs opts) . liftIO $ do
@@ -107,8 +108,11 @@ optToOutputSettings opts = do
 
   (writer, writerExts) <-
             if ".lua" `T.isSuffixOf` format
-               then return (TextWriter
-                       (\o d -> writeCustom (T.unpack writerName) o d), mempty)
+               then return ( TextWriter $
+                             engineWriteCustom scriptingEngine
+                                               (T.unpack writerName)
+                           , mempty
+                           )
                else if optSandbox opts
                        then
                          case runPure (getWriter writerName) of
@@ -128,7 +132,8 @@ optToOutputSettings opts = do
   syntaxMap <- foldM addSyntaxMap defaultSyntaxMap
                      (optSyntaxDefinitions opts)
 
-  hlStyle <- traverse (lookupHighlightStyle . T.unpack) $ optHighlightStyle opts
+  hlStyle <- traverse (lookupHighlightingStyle . T.unpack) $
+               optHighlightStyle opts
 
   let setVariableM k v = return . setVariable k v
 
@@ -223,6 +228,7 @@ optToOutputSettings opts = do
         , writerSlideLevel       = optSlideLevel opts
         , writerHighlightStyle   = hlStyle
         , writerSetextHeaders    = optSetextHeaders opts
+        , writerListTables       = optListTables opts
         , writerEpubSubdirectory = T.pack $ optEpubSubdirectory opts
         , writerEpubMetadata     = epubMetadata
         , writerEpubFonts        = optEpubFonts opts

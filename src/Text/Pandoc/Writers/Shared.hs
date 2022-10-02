@@ -56,7 +56,7 @@ import qualified Text.Pandoc.Builder as Builder
 import Text.Pandoc.Definition
 import Text.Pandoc.Options
 import Text.DocLayout
-import Text.Pandoc.Shared (stringify, makeSections, deNote, deLink, blocksToInlines)
+import Text.Pandoc.Shared (stringify, makeSections, blocksToInlines)
 import Text.Pandoc.Walk (walk)
 import qualified Text.Pandoc.UTF8 as UTF8
 import Text.Pandoc.XML (escapeStringForXML)
@@ -231,14 +231,15 @@ unsmartify opts = T.concatMap $ \c -> case c of
   '\8216' -> "'"
   _       -> T.singleton c
 
+-- | Writes a grid table.
 gridTable :: (Monad m, HasChars a)
           => WriterOptions
-          -> (WriterOptions -> [Block] -> m (Doc a))
-          -> Bool -- ^ headless
-          -> [Alignment]
-          -> [Double]
-          -> [[Block]]
-          -> [[[Block]]]
+          -> (WriterOptions -> [Block] -> m (Doc a)) -- ^ format Doc writer
+          -> Bool             -- ^ headless
+          -> [Alignment]      -- ^ column alignments
+          -> [Double]         -- ^ column widths
+          -> [[Block]]        -- ^ table header row
+          -> [[[Block]]]      -- ^ table body rows
           -> m (Doc a)
 gridTable opts blocksToDoc headless aligns widths headers rows = do
   -- the number of columns will be used in case of even widths
@@ -444,7 +445,10 @@ sectionToListItem opts (Div (ident,_,_)
                    then id
                    else (Span ("",["toc-section-number"],[])
                            [Str num] :) . (Space :)
-   headerText' = addNumber $ walk (deLink . deNote) ils
+   clean (Link _ xs _) = xs
+   clean (Note _) = []
+   clean x = [x]
+   headerText' = addNumber $ walk (concatMap clean) ils
    headerLink = if T.null ident
                    then headerText'
                    else [Link ("toc-" <> ident, [], []) headerText' ("#" <> ident, "")]

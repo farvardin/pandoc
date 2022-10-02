@@ -1,31 +1,34 @@
 \begin{longtable}[]{@{}
   >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}
   >{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{0.5000}}@{}}
-\caption{List of Students}\tabularnewline
-\toprule
+\caption{List of Students}\label{students}\tabularnewline
+\toprule()
 \begin{minipage}[b]{\linewidth}\centering
 Student ID
 \end{minipage} & \begin{minipage}[b]{\linewidth}\centering
 Name
 \end{minipage} \\
-\midrule
+\midrule()
 \endfirsthead
-\toprule
+\toprule()
 \begin{minipage}[b]{\linewidth}\centering
 Student ID
 \end{minipage} & \begin{minipage}[b]{\linewidth}\centering
 Name
 \end{minipage} \\
-\midrule
+\midrule()
 \endhead
-\multicolumn{2}{l}{Computer Science} \\
+\multicolumn{2}{@{}>{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{1.0000} + 2\tabcolsep}@{}}{%
+Computer Science} \\
 3741255 & Jones, Martha \\
 4077830 & Pierce, Benjamin \\
 5151701 & Kirk, James \\
-\multicolumn{2}{l}{Russian Literature} \\
+\multicolumn{2}{@{}>{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{1.0000} + 2\tabcolsep}@{}}{%
+Russian Literature} \\
 3971244 & Nim, Victor \\
-\multicolumn{2}{l}{Astrophysics} \\
+\multicolumn{2}{@{}>{\raggedright\arraybackslash}p{(\columnwidth - 2\tabcolsep) * \real{1.0000} + 2\tabcolsep}@{}}{%
+Astrophysics} \\
 4100332 & Petrov, Alexandra \\
 4100332 & Toyota, Hiroko \\
-\bottomrule
+\bottomrule()
 \end{longtable}

@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE MultiWayIf          #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -46,8 +47,8 @@ import Text.Blaze.Html hiding (contents)
 import Text.Pandoc.Translations (Term(Abstract))
 import Text.Pandoc.CSS (cssAttributes)
 import Text.Pandoc.Definition
-import Text.Pandoc.Highlighting (formatHtmlBlock, formatHtmlInline, highlight,
-                                 styleToCss)
+import Text.Pandoc.Highlighting (formatHtmlBlock, formatHtml4Block,
+                 formatHtmlInline, highlight, styleToCss)
 import Text.Pandoc.ImageSize
 import Text.Pandoc.Options
 import Text.Pandoc.Shared
@@ -113,20 +114,21 @@ defaultWriterState = WriterState {stNotes= [], stEmittedNotes = 0, stMath = Fals
 -- Helpers to render HTML with the appropriate function.
 
 strToHtml :: Text -> Html
-strToHtml = strToHtml' . T.unpack
+strToHtml t
+    | T.any isSpecial t =
+       let !x = foldl' go mempty $ T.groupBy samegroup t
+        in x
+    | otherwise = toHtml t
   where
-    strToHtml' ('\'':xs) = preEscapedString "\'" `mappend` strToHtml' xs
-    strToHtml' ('"' :xs) = preEscapedString "\"" `mappend` strToHtml' xs
-    strToHtml' (x:xs) | needsVariationSelector x
-                      = preEscapedString [x, '\xFE0E'] `mappend`
-                        case xs of
-                          ('\xFE0E':ys) -> strToHtml' ys
-                          _             -> strToHtml' xs
-    strToHtml' xs@(_:_) = case break (\c -> c == '\'' || c == '"' ||
-                                       needsVariationSelector c) xs of
-                            (_ ,[]) -> toHtml xs
-                            (ys,zs) -> toHtml ys `mappend` strToHtml' zs
-    strToHtml' [] = ""
+    samegroup c d = d == '\xFE0E' || not (isSpecial c || isSpecial d)
+    isSpecial '\'' = True
+    isSpecial '"' = True
+    isSpecial c = needsVariationSelector c
+    go h "\'" = h <> preEscapedString "\'"
+    go h "\"" = h <> preEscapedString "\""
+    go h txt | T.length txt == 1 && T.all needsVariationSelector txt
+           = h <> preEscapedString (T.unpack txt <> "\xFE0E")
+    go h txt = h <> toHtml txt
 
 -- See #5469: this prevents iOS from substituting emojis.
 needsVariationSelector :: Char -> Bool
@@ -500,7 +502,7 @@ listItemToHtml opts bls
       let checkbox  = if checked
                       then checkbox' ! A.checked ""
                       else checkbox'
-          checkbox' = H.input ! A.type_ "checkbox" ! A.disabled "" >> nl
+          checkbox' = H.input ! A.type_ "checkbox" ! A.disabled ""
       isContents <- inlineListToHtml opts is
       bsContents <- blockListToHtml opts bs
       return $ constr (checkbox >> isContents) >> bsContents
@@ -540,10 +542,12 @@ footnoteSection refLocation startCounter notes = do
   let container x
         | html5
         , epubVersion == Just EPUB3
-                = H5.section ! A.class_ className
+                = H5.section ! A.id "footnotes"
+                             ! A.class_ className
                              ! customAttribute "epub:type" "footnotes" $ x
-        | html5 = H5.section ! A.class_ className
-                             ! customAttribute "role" "doc-endnotes"
+        | html5 = H5.section ! A5.id "footnotes"
+                             ! A5.class_ className
+                             ! A5.role "doc-endnotes"
                              $ x
         | slideVariant /= NoSlides = H.div ! A.class_ "footnotes slide" $ x
         | otherwise = H.div ! A.class_ className $ x
@@ -675,26 +679,21 @@ attrsToHtml :: PandocMonad m
             => WriterOptions -> Attr -> StateT WriterState m [Attribute]
 attrsToHtml opts (id',classes',keyvals) = do
   attrs <- toAttrs keyvals
+  let classes'' = filter (not . T.null) classes'
   return $
     [prefixedId opts id' | not (T.null id')] ++
-    [A.class_ (toValue $ T.unwords classes') | not (null classes')] ++ attrs
+    [A.class_ (toValue $ T.unwords classes'') | not (null classes'')] ++ attrs
 
 imgAttrsToHtml :: PandocMonad m
                => WriterOptions -> Attr -> StateT WriterState m [Attribute]
 imgAttrsToHtml opts attr = do
-  attrs <- attrsToHtml opts (ident,cls,kvs')
-  dimattrs <- toAttrs (dimensionsToAttrList attr)
-  return $ attrs ++ dimattrs
+  attrsToHtml opts (ident,cls, consolidateStyles (kvs' ++ dimensionsToAttrList attr))
   where
     (ident,cls,kvs) = attr
     kvs' = filter isNotDim kvs
     isNotDim ("width", _)  = False
     isNotDim ("height", _) = False
     isNotDim _             = True
-
-dimensionsToAttrList :: Attr -> [(Text, Text)]
-dimensionsToAttrList attr = consolidateStyles $ go Width ++ go Height
-  where
     consolidateStyles :: [(Text, Text)] -> [(Text, Text)]
     consolidateStyles xs =
       case partition isStyle xs of
@@ -702,6 +701,10 @@ dimensionsToAttrList attr = consolidateStyles $ go Width ++ go Height
            (ss, rest) -> ("style", T.intercalate ";" $ map snd ss) : rest
     isStyle ("style", _) = True
     isStyle _            = False
+
+dimensionsToAttrList :: Attr -> [(Text, Text)]
+dimensionsToAttrList attr = go Width ++ go Height
+  where
     go dir = case dimension dir attr of
                (Just (Pixel a)) -> [(tshow dir, tshow a)]
                (Just x)         -> [("style", tshow dir <> ":" <> tshow x)]
@@ -741,6 +744,8 @@ adjustNumbers opts doc =
      then doc
      else walk go doc
   where
+   go (Div (ident,"section":classes,kvs) lst) =
+     Div (ident,"section":classes,map fixnum kvs) lst
    go (Header level (ident,classes,kvs) lst) =
      Header level (ident,classes,map fixnum kvs) lst
    go x = x
@@ -804,9 +809,11 @@ blockToHtmlInner opts (Div (ident, "section":dclasses, dkvs)
   let inDiv' zs = RawBlock (Format "html") ("<div class=\""
                        <> fragmentClass <> "\">") :
                    (zs ++ [RawBlock (Format "html") "</div>"])
-  let breakOnPauses zs = case splitBy isPause zs of
+  let breakOnPauses zs
+        | slide = case splitBy isPause zs of
                            []   -> []
                            y:ys -> y ++ concatMap inDiv' ys
+        | otherwise = zs
   let (titleBlocks, innerSecs) =
         if titleSlide
            -- title slides have no content of their own
@@ -909,7 +916,7 @@ blockToHtmlInner opts (Div attr@(ident, classes, kvs') bs) = do
                DZSlides       -> do
                  t <- addAttrs opts' attr $
                              H5.div contents'
-                 return $ t ! H5.customAttribute "role" "note"
+                 return $ t ! A5.role "note"
                NoSlides       -> addAttrs opts' attr $
                            H.div contents'
                _              -> return mempty
@@ -930,6 +937,7 @@ blockToHtmlInner _ HorizontalRule = do
   html5 <- gets stHtml5
   return $ if html5 then H5.hr else H.hr
 blockToHtmlInner opts (CodeBlock (id',classes,keyvals) rawCode) = do
+  html5 <- gets stHtml5
   id'' <- if T.null id'
              then do
                modify $ \st -> st{ stCodeBlockNum = stCodeBlockNum st + 1 }
@@ -948,7 +956,8 @@ blockToHtmlInner opts (CodeBlock (id',classes,keyvals) rawCode) = do
                     then T.unlines . map ("> " <>) . T.lines $ rawCode
                     else rawCode
       hlCode   = if isJust (writerHighlightStyle opts)
-                    then highlight (writerSyntaxMap opts) formatHtmlBlock
+                    then highlight (writerSyntaxMap opts)
+                         (if html5 then formatHtmlBlock else formatHtml4Block)
                             (id'',classes',keyvals) adjCode
                     else Left ""
   case hlCode of
@@ -989,7 +998,7 @@ blockToHtmlInner opts (Header level (ident,classes,kvs) lst) = do
   let contents' = if writerNumberSections opts && not (T.null secnum)
                      && "unnumbered" `notElem` classes
                      then (H.span ! A.class_ "header-section-number"
-                             $ toHtml secnum) >> strToHtml " " >> contents
+                             $ toHtml secnum) >> toHtml ' ' >> contents
                      else contents
   html5 <- gets stHtml5
   let kvs' = if html5
@@ -1371,29 +1380,42 @@ inlineToHtml opts inline = do
   html5 <- gets stHtml5
   case inline of
     (Str str)      -> return $ strToHtml str
-    Space          -> return $ strToHtml " "
+    Space          -> return $ toHtml ' '
     SoftBreak      -> return $ case writerWrapText opts of
-                                     WrapNone     -> " "
-                                     WrapAuto     -> " "
-                                     WrapPreserve -> nl
+                                     WrapNone     -> toHtml ' '
+                                     WrapAuto     -> toHtml ' '
+                                     WrapPreserve -> toHtml '\n'
     LineBreak      -> return $ do
                         if html5 then H5.br else H.br
-                        strToHtml "\n"
+                        toHtml '\n'
     (Span ("",[cls],[]) ils)
         | cls == "csl-block" || cls == "csl-left-margin" ||
           cls == "csl-right-inline" || cls == "csl-indent"
         -> inlineListToHtml opts ils >>= inDiv cls
 
     (Span (id',classes,kvs) ils) ->
-                        let spanLikeTag = case classes of
-                                (c:_) -> do
-                                  guard (c `Set.member` htmlSpanLikeElements)
-                                  pure $ customParent (textTag c)
-                                _   -> Nothing
-                        in case spanLikeTag of
-                            Just tag -> do
+                        let go Nothing c
+                             | c `Set.member` htmlSpanLikeElements
+                               = Just (customParent (textTag c), [])
+                             | c == "smallcaps"
+                               = Just (H.span ! A.class_ "smallcaps", [])
+                             | c == "underline"
+                               = Just (H.u, [])
+                             | otherwise = Nothing
+                            go (Just (t,cs)) c
+                             | c `Set.member` htmlSpanLikeElements
+                               = Just (t . customParent (textTag c), cs)
+                             | c == "smallcaps"
+                               = Just (t . (H.span ! A.class_ "smallcaps"), cs)
+                             | c == "underline"
+                               = Just (t . H.u, cs)
+                             | otherwise
+                               = Just (t, c:cs)
+                            spanLikeTags = foldl' go Nothing
+                        in case spanLikeTags classes of
+                            Just (tag, cs) -> do
                               h <- inlineListToHtml opts ils
-                              addAttrs opts (id',tail classes',kvs') $ tag h
+                              addAttrs opts (id',cs,kvs') $ tag h
                             Nothing -> do
                               h <- inlineListToHtml opts ils
                               addAttrs opts (id',classes',kvs') (H.span h)
@@ -1447,10 +1469,10 @@ inlineToHtml opts inline = do
     (Subscript lst)   -> H.sub <$> inlineListToHtml opts lst
     (Quoted quoteType lst) ->
                         let (leftQuote, rightQuote) = case quoteType of
-                              SingleQuote -> (strToHtml "‘",
-                                              strToHtml "’")
-                              DoubleQuote -> (strToHtml "“",
-                                              strToHtml "”")
+                              SingleQuote -> (toHtml '‘',
+                                              toHtml '’')
+                              DoubleQuote -> (toHtml '“',
+                                              toHtml '”')
 
                         in if writerHtmlQTags opts
                                then do
@@ -1525,10 +1547,10 @@ inlineToHtml opts inline = do
              _ -> do report $ InlineNotRendered inline
                      return mempty
     (Link attr txt (s,_)) | "mailto:" `T.isPrefixOf` s -> do
-                        linkText <- inlineListToHtml opts txt
+                        linkText <- inlineListToHtml opts (removeLinks txt)
                         obfuscateLink opts attr linkText s
     (Link (ident,classes,kvs) txt (s,tit)) -> do
-                        linkText <- inlineListToHtml opts txt
+                        linkText <- inlineListToHtml opts (removeLinks txt)
                         slideVariant <- gets stSlideVariant
                         let s' = case T.uncons s of
                                    Just ('#',xs) -> let prefix = if slideVariant == RevealJsSlides
@@ -1593,10 +1615,12 @@ inlineToHtml opts inline = do
                                        $ toHtml ref
                         return $ case epubVersion of
                                       Just EPUB3 -> link ! customAttribute "epub:type" "noteref"
-                                      _ | html5  -> link ! H5.customAttribute
-                                                      "role" "doc-noteref"
+                                      _ | html5  -> link ! A5.role "doc-noteref"
                                       _          -> link
-    (Cite cits il)-> do contents <- inlineListToHtml opts (walk addRoleToLink il)
+    (Cite cits il)-> do contents <- inlineListToHtml opts
+                                      (if html5
+                                          then walk addRoleToLink il
+                                          else il)
                         let citationIds = T.unwords $ map citationId cits
                         let result = H.span ! A.class_ "citation" $ contents
                         return $ if html5
@@ -1640,8 +1664,6 @@ blockListToNote opts ref blocks = do
   let noteItem' = case epubVersion of
                        Just EPUB3 -> noteItem !
                                        customAttribute "epub:type" "footnote"
-                       _ | html5  -> noteItem !
-                                       customAttribute "role" "doc-endnote"
                        _          -> noteItem
   return $ nl >> noteItem'
 
@@ -1709,3 +1731,11 @@ isRawHtml f = do
   html5 <- gets stHtml5
   return $ f == Format "html" ||
            ((html5 && f == Format "html5") || f == Format "html4")
+
+-- We need to remove links from link text, because an <a> element is
+-- not allowed inside another <a> element.
+removeLinks :: [Inline] -> [Inline]
+removeLinks = walk go
+ where
+  go (Link attr ils _) = Span attr ils
+  go x = x

@@ -76,7 +76,7 @@ pandocToMs opts (Pandoc meta blocks) = do
   let context = defField "body" main
               $ defField "has-inline-math" hasInlineMath
               $ defField "hyphenate" True
-              $ defField "pandoc-version" pandocVersion
+              $ defField "pandoc-version" pandocVersionText
               $ defField "toc" (writerTableOfContents opts)
               $ defField "title-meta" titleMeta
               $ defField "author-meta" (T.intercalate "; " authorsMeta)
@@ -454,7 +454,7 @@ inlineToMs opts (Math InlineMath str) = do
        Left il -> inlineToMs opts il
        Right r -> return $ literal "@" <> literal r <> literal "@"
 inlineToMs opts (Math DisplayMath str) = do
-  res <- convertMath writeEqn InlineMath str
+  res <- convertMath writeEqn DisplayMath str
   case res of
        Left il -> do
          contents <- inlineToMs opts il
@@ -578,7 +578,7 @@ hexColor (RGB r g b) = T.pack $ printf "%02x%02x%02x" r g b
 
 toMacro :: Style -> TokenType -> Doc Text
 toMacro sty toktype =
-  nowrap (literal ".ds " <> literal (tshow toktype) <> literal " " <>
+  nowrap (literal ".ds " <> literal (tshow toktype) <> literal " \\&" <>
             setbg <> setcolor <> setfont <>
             literal "\\\\$1" <>
             resetfont <> resetcolor <> resetbg)

@@ -12,6 +12,7 @@
 - Alexander V Vershilov
 - Alexandre Franke
 - Alfred Wechselberger
+- Amir Dekel
 - Amogh Rathore
 - Anabra
 - Anders Waldenborg
@@ -29,11 +30,13 @@
 - Arlo O'Keeffe
 - Artyom Kazak
 - B. Scott Michel
+- Bastien Dumont
 - Ben Firshman
 - Ben Gamari
 - Ben Steinberg
 - Beni Cherniavsky-Paskin
 - Benjamin Bray
+- Benjamin Wuethrich
 - Benoit Schweblin
 - Benson Muite
 - Bjorn Buckwalter
@@ -48,8 +51,10 @@
 - Calvin Beck
 - Carlos Sosa
 - Carsten Allefeld
+- Castedo Ellerman
 - Cécile Chemin
 - Cédric Couralet
+- Cezary Drożak
 - Charanjit Singh
 - Chris Black
 - Christian Conkle
@@ -76,10 +81,12 @@
 - Derek Chen-Becker
 - Diego Balseiro
 - Dimitri Sabadie
+- Dimitris Apostolou
 - Dmitry Pogodin
 - Dmitry Volodin
 - Douglas Calvert
 - Eigil Rischel
+- Elliot Bobrow
 - Emanuel Evans
 - Emerson Harkin
 - Emily Bourke
@@ -108,11 +115,14 @@
 - Frerich Raabe
 - Fyodor Sheremetyev
 - Gabor Pali
+- Gabriel Lewertowski
 - Gavin Beatty
+- Georgi Lyubenov
 - Gottfried Haider
 - Greg Maslov
 - Greg Rundlett
 - Grégory Bataille
+- Guriy Samarin
 - Gwern Branwen
 - Hamish Mackenzie
 - Hans-Peter Deifel
@@ -120,15 +130,20 @@
 - Henrik Tramberend
 - Henry de Valence
 - Herwig Stuetz
+- Hos Es
 - Hubert Plociniczak
 - Ian Max Andolina
 - Igor Khorlo
 - Igor Pashev
 - Ilya V. Portnov
+- Ivan Panchenko
 - Ivan Trubach
+- Ivar de Bruin
 - Ivo Clarysse
+- Jaap de Jong
 - J. B. Rainsberger
 - J. Lewis Muir
+- Jaehwang Jung
 - Jaime Marquínez Ferrándiz
 - Jake Zimmerman
 - Jakob Voß
@@ -159,6 +174,7 @@
 - Jonas Scholl
 - Jonas Smedegaard
 - Jonathan Daugherty
+- Jonathan Dönszelmann
 - Jose Luis Duran
 - José de Mattos Neto
 - Josef Svenningsson
@@ -184,11 +200,14 @@
 - Lorenzo
 - Lucas Escot
 - Lucas Viana
+- Lucas V. R
 - Luke Plant
 - Marc Schreiber
+- Mario Lang
 - Mark Szepieniec
 - Mark Wright
 - Martin Linn
+- Masataka Ogawa
 - Masayoshi Takahashi
 - Matej Kollar
 - Mathias Schenner
@@ -215,6 +234,7 @@
 - MinRK
 - Morton Fox
 - Nathan Gass
+- Naveen
 - Neil Mayhew
 - Nick Bart
 - Nick Berendsen
@@ -226,6 +246,7 @@
 - Nixon Enraght-Moony
 - Nokome Bentley
 - OCzarnecki
+- Ola Wolska
 - Ole Martin Ruud
 - Oliver Matthews
 - Ophir Lifshitz
@@ -272,6 +293,8 @@
 - Simon Hengel
 - Simon Schuster
 - Stefan Dresselhaus
+- Sukil Etxenike
+- Sukka
 - Sumit Sahrawat
 - TEC
 - Tarik Graba
@@ -302,11 +325,13 @@
 - Vlad Hanciuta
 - Waldir Pimenta
 - Wandmalfarbe
+- Wentao Han
 - Wikiwide
 - William Lupton
 - Winnie Hellmann
 - Xavier Olive
 - Yan Pashkovsky
+- YI
 - Yoan Blanc
 - Yuchen Pei
 - Zihang Chen
@@ -314,6 +339,7 @@
 - andrebauer
 - argent0
 - badumont
+- black-desk
 - blmage
 - bucklereed
 - bumper314
@@ -321,6 +347,7 @@
 - cholonam
 - csforste
 - d-dorazio
+- damon-sava-stanley
 - dbecher-ito
 - ebiim
 - favonia
@@ -329,8 +356,10 @@
 - jeongminkim-islab
 - kaizshang91
 - lux-lth
+- luz paz
 - lwolfsonkin
 - mbrackeantidot
+- mjfs
 - mt_caret
 - niszet
 - nkalvi

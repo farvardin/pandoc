@@ -16,6 +16,7 @@ import Text.Pandoc.Citeproc.Locator (parseLocator, toLocatorMap,
                                      LocatorInfo(..))
 import Text.Pandoc.Citeproc.CslJson (cslJsonToReferences)
 import Text.Pandoc.Citeproc.BibTeX (readBibtexString, Variant(..))
+import Text.Pandoc.MIME (MimeType)
 import Text.Pandoc.Readers.RIS (readRIS)
 import Text.Pandoc.Citeproc.MetaValue (metaValueToReference, metaValueToText)
 import Text.Pandoc.Readers.Markdown (yamlToRefs)
@@ -108,8 +109,8 @@ processCitations (Pandoc meta bs) = do
          evalState (walkM insertResolvedCitations $ Pandoc meta' bs)
          $ cits
   return $ walk removeQuoteSpan
-         $ Pandoc meta''
-         $ insertRefs refkvs classes meta'' (B.toList bibs) bs'
+         $ insertRefs refkvs classes (B.toList bibs)
+         $ Pandoc meta'' bs'
 
 removeQuoteSpan :: Inline -> Inline
 removeQuoteSpan (Span ("",["csl-quoted"],[]) xs) = Span nullAttr xs
@@ -235,8 +236,8 @@ insertSpace ils =
 getRefsFromBib :: PandocMonad m
                => Locale -> (Text -> Bool) -> Text -> m [Reference Inlines]
 getRefsFromBib locale idpred fp = do
-  (raw, _) <- fetchItem fp
-  case formatFromExtension (T.unpack fp) of
+  (raw, mt) <- fetchItem fp
+  case getBibliographyFormat (T.unpack fp) mt of
     Just f -> getRefs locale f idpred (Just fp) raw
     Nothing -> throwError $ PandocAppError $
                  "Could not determine bibliography format for " <> fp
@@ -352,17 +353,28 @@ data BibFormat =
   | Format_ris
   deriving (Show, Eq, Ord)
 
-formatFromExtension :: FilePath -> Maybe BibFormat
-formatFromExtension fp = case dropWhile (== '.') $ takeExtension fp of
-                           "biblatex" -> Just Format_biblatex
-                           "bibtex"   -> Just Format_bibtex
-                           "bib"      -> Just Format_biblatex
-                           "json"     -> Just Format_json
-                           "yaml"     -> Just Format_yaml
-                           "yml"      -> Just Format_yaml
-                           "ris"      -> Just Format_ris
-                           _          -> Nothing
-
+getBibliographyFormat :: FilePath -> Maybe MimeType -> Maybe BibFormat
+getBibliographyFormat fp mbmime = do
+  let ext = takeExtension fp
+  case ext of
+    ".biblatex" -> pure Format_biblatex
+    ".bibtex"   -> pure Format_bibtex
+    ".bib"      -> pure Format_biblatex
+    ".json"     -> pure Format_json
+    ".yaml"     -> pure Format_yaml
+    ".yml"      -> pure Format_yaml
+    ".ris"      -> pure Format_ris
+    _ -> do
+      mime <- mbmime
+      case T.takeWhile (/= ';') mime of
+            "application/x-bibtex" -> pure Format_biblatex
+            "application/x-reseach-info-systems" -> pure Format_ris
+            "application/vnd.citationstyles.csl+json" -> pure Format_json
+            "application/json" -> pure Format_json
+            "application/x-yaml" -> pure Format_yaml
+            "text/x-yaml" -> pure Format_yaml
+            "text/yaml" -> pure Format_yaml
+            _ -> Nothing
 
 isNote :: Inline -> Bool
 isNote (Cite _ [Note _]) = True
@@ -461,23 +473,24 @@ isYesValue _ = False
 -- if document contains a Div with id="refs", insert
 -- references as its contents.  Otherwise, insert references
 -- at the end of the document in a Div with id="refs"
-insertRefs :: [(Text,Text)] -> [Text] -> Meta -> [Block] -> [Block] -> [Block]
-insertRefs _ _ _  []   bs = bs
-insertRefs refkvs refclasses meta refs bs =
+insertRefs :: [(Text,Text)] -> [Text] -> [Block] -> Pandoc -> Pandoc
+insertRefs _ _ [] d = d
+insertRefs refkvs refclasses refs (Pandoc meta bs) =
   if isRefRemove meta
-     then bs
-     else case runState (walkM go bs) False of
-               (bs', True) -> bs'
-               (_, False)
-                 -> case refTitle meta of
+     then Pandoc meta bs
+     else case runState (walkM go (Pandoc meta bs)) False of
+               (d', True) -> d'
+               (Pandoc meta' bs', False)
+                 -> Pandoc meta' $
+                    case refTitle meta of
                       Nothing ->
-                        case reverse bs of
+                        case reverse bs' of
                           Header lev (id',classes,kvs) ys : xs ->
                             reverse xs ++
                             [Header lev (id',addUnNumbered classes,kvs) ys,
                              Div ("refs",refclasses,refkvs) refs]
-                          _ -> bs ++ [refDiv]
-                      Just ils -> bs ++
+                          _ -> bs' ++ [refDiv]
+                      Just ils -> bs' ++
                         [Header 1 ("bibliography", ["unnumbered"], []) ils,
                          refDiv]
   where

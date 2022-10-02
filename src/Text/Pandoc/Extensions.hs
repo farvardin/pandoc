@@ -265,7 +265,6 @@ githubMarkdownExtensions :: Extensions
 githubMarkdownExtensions = extensionsFromList
   [ Ext_pipe_tables
   , Ext_raw_html
-  , Ext_native_divs
   , Ext_auto_identifiers
   , Ext_gfm_auto_identifiers
   , Ext_autolink_bare_uris
@@ -356,7 +355,6 @@ getDefaultExtensions "plain"           = plainExtensions
 getDefaultExtensions "gfm"             = extensionsFromList
   [ Ext_pipe_tables
   , Ext_raw_html
-  , Ext_native_divs
   , Ext_auto_identifiers
   , Ext_gfm_auto_identifiers
   , Ext_autolink_bare_uris
@@ -365,6 +363,7 @@ getDefaultExtensions "gfm"             = extensionsFromList
   , Ext_emoji
   , Ext_yaml_metadata_block
   , Ext_footnotes
+  , Ext_tex_math_dollars
   ]
 getDefaultExtensions "commonmark"      = extensionsFromList
                                           [Ext_raw_html]
@@ -377,7 +376,6 @@ getDefaultExtensions "commonmark_x"    = extensionsFromList
   , Ext_emoji
   , Ext_pipe_tables
   , Ext_raw_html
-  , Ext_raw_tex            -- only supported in writer (for math)
   , Ext_smart
   , Ext_tex_math_dollars
   , Ext_superscript
@@ -513,7 +511,6 @@ getAllExtensions f = universalExtensions <> getAll f
     , Ext_task_lists
     , Ext_emoji
     , Ext_raw_html
-    , Ext_raw_tex            -- only supported in writer (for math)
     , Ext_implicit_figures
     , Ext_hard_line_breaks
     , Ext_smart
@@ -595,7 +592,9 @@ getAllExtensions f = universalExtensions <> getAll f
     extensionsFromList
     [ Ext_smart ]
   getAll "vimwiki"         = autoIdExtensions
-  getAll "dokuwiki"        = autoIdExtensions
+  getAll "dokuwiki"        = autoIdExtensions <>
+    extensionsFromList
+    [ Ext_tex_math_dollars ]
   getAll "tikiwiki"        = autoIdExtensions
   getAll "rst"             = autoIdExtensions <>
     extensionsFromList
@@ -632,4 +631,3 @@ parseFormatSpec = parse formatSpec ""
                     case polarity of
                         '+' -> (ext : extsToEnable, extsToDisable)
                         _   -> (extsToEnable, ext : extsToDisable)
-

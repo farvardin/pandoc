@@ -1,9 +1,11 @@
 {-# LANGUAGE CPP                 #-}
+{-# LANGUAGE TemplateHaskell     #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
 {-# LANGUAGE OverloadedStrings   #-}
 {-# LANGUAGE FlexibleContexts    #-}
+{-# LANGUAGE TypeApplications    #-}
 {- |
    Module      : Text.Pandoc.App.CommandLineOptions
    Copyright   : Copyright (C) 2006-2022 John MacFarlane
@@ -20,12 +22,10 @@ module Text.Pandoc.App.CommandLineOptions (
           , parseOptionsFromArgs
           , options
           , engines
-          , lookupHighlightStyle
           , setVariable
           ) where
 import Control.Monad
 import Control.Monad.Trans
-import Control.Monad.Except (throwError)
 import Control.Monad.State.Strict
 import Data.Aeson.Encode.Pretty (encodePretty', Config(..), keyOrder,
          defConfig, Indent(..), NumberFormat(..))
@@ -38,7 +38,7 @@ import Data.List (isPrefixOf)
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text (Text)
 import Safe (tailDef)
-import Skylighting (Style, Syntax (..), defaultSyntaxMap, parseTheme)
+import Skylighting (Syntax (..), defaultSyntaxMap)
 import System.Console.GetOpt
 import System.Environment (getArgs, getProgName)
 import System.Exit (exitSuccess)
@@ -51,7 +51,8 @@ import Text.Pandoc.App.Opt (Opt (..), LineEnding (..), IpynbOutput (..),
                             DefaultsState (..), applyDefaults,
                             fullDefaultsPath)
 import Text.Pandoc.Filter (Filter (..))
-import Text.Pandoc.Highlighting (highlightingStyles)
+import Text.Pandoc.Highlighting (highlightingStyles, lookupHighlightingStyle)
+import Text.Pandoc.Scripting (ScriptingEngine (engineName))
 import Text.Pandoc.Shared (ordNub, elemText, safeStrRead, defaultUserDataDir)
 import Text.Printf
 
@@ -129,8 +130,8 @@ pdfEngines = ordNub $ map snd engines
 
 -- | A list of functions, each transforming the options data structure
 --   in response to a command-line option.
-options :: [OptDescr (Opt -> IO Opt)]
-options =
+options :: ScriptingEngine -> [OptDescr (Opt -> IO Opt)]
+options scriptingEngine =
     [ Option "fr" ["from","read"]
                  (ReqArg
                   (\arg opt -> return opt { optFrom =
@@ -421,7 +422,14 @@ options =
 
     , Option "" ["self-contained"]
                  (NoArg
-                  (\opt -> return opt { optSelfContained = True }))
+                  (\opt -> do
+                    deprecatedOption "--self-contained" "use --embed-resources --standalone"
+                    return opt { optSelfContained = True }))
+                 "" -- "Make slide shows include all the needed js and css (deprecated)"
+
+    , Option "" ["embed-resources"]
+                 (NoArg
+                  (\opt -> return opt { optEmbedResources = True }))
                  "" -- "Make slide shows include all the needed js and css"
 
     , Option "" ["request-header"]
@@ -497,14 +505,6 @@ options =
                   "NUMBER")
                  "" -- "Headers base level"
 
-    , Option "" ["strip-empty-paragraphs"]
-                 (NoArg
-                  (\opt -> do
-                      deprecatedOption "--strip-empty-paragraphs"
-                        "Use +empty_paragraphs extension."
-                      return opt{ optStripEmptyParagraphs = True }))
-                 "" -- "Strip empty paragraphs"
-
     , Option "" ["track-changes"]
                  (ReqArg
                   (\arg opt -> do
@@ -541,14 +541,6 @@ options =
                   "block|section|document")
                  "" -- "Accepting or reject MS Word track-changes.""
 
-    , Option "" ["atx-headers"]
-                 (NoArg
-                  (\opt -> do
-                    deprecatedOption "--atx-headers"
-                      "Use --markdown-headings=atx instead."
-                    return opt { optSetextHeaders = False } ))
-                 "" -- "Use atx-style headers for markdown"
-
     , Option "" ["markdown-headings"]
                   (ReqArg
                     (\arg opt -> do
@@ -562,6 +554,12 @@ options =
                     )
                   "setext|atx")
                   ""
+
+    , Option "" ["list-tables"]
+                 (NoArg
+                  (\opt -> do
+                    return opt { optListTables = True } ))
+                 "" -- "Use list tables for RST"
 
     , Option "" ["listings"]
                  (NoArg
@@ -704,10 +702,11 @@ options =
 
      , Option "" ["csl"]
                  (ReqArg
-                  (\arg opt ->
-                     return opt{ optMetadata =
-                                   addMeta "csl" (normalizePath arg) $
-                                   optMetadata opt })
+                  (\arg opt -> do
+                    case lookupMeta (T.pack "csl") $ optMetadata opt of
+                      Just _ -> E.throwIO $ PandocOptionError "Only one CSL file can be specified."
+                      Nothing -> return opt{ optMetadata = addMeta "csl" (normalizePath arg) $
+                      optMetadata opt })
                    "FILE")
                  ""
 
@@ -814,7 +813,8 @@ options =
                      let optnames (Option shorts longs _ _) =
                            map (\c -> ['-',c]) shorts ++
                            map ("--" ++) longs
-                     let allopts = unwords (concatMap optnames options)
+                     let allopts = unwords (concatMap optnames
+                                            (options scriptingEngine))
                      UTF8.hPutStrLn stdout $ T.pack $ printf tpl allopts
                          (T.unpack $ T.unwords readersNames)
                          (T.unpack $ T.unwords writersNames)
@@ -921,7 +921,7 @@ options =
                  (ReqArg
                   (\arg opt -> do
                      let write = maybe B.putStr B.writeFile $ optOutputFile opt
-                     sty <- runIOorExplode $ lookupHighlightStyle arg
+                     sty <- runIOorExplode $ lookupHighlightingStyle arg
                      write $ encodePretty'
                        defConfig{confIndent = Spaces 4
                                 ,confCompare = keyOrder
@@ -948,8 +948,9 @@ options =
                      defaultDatadir <- defaultUserDataDir
                      UTF8.hPutStrLn stdout
                       $ T.pack
-                      $ prg ++ " " ++ T.unpack pandocVersion ++
-                        compileInfo ++
+                      $ prg ++ " " ++ T.unpack pandocVersionText ++
+                        compileInfo ++ "\nScripting engine: " ++
+                        T.unpack (engineName scriptingEngine) ++
                         "\nUser data directory: " ++ defaultDatadir ++
                         ('\n':copyrightMessage)
                      exitSuccess ))
@@ -959,7 +960,8 @@ options =
                  (NoArg
                   (\_ -> do
                      prg <- getProgName
-                     UTF8.hPutStr stdout (T.pack $ usageMessage prg options)
+                     UTF8.hPutStr stdout (T.pack $ usageMessage prg
+                                          (options scriptingEngine))
                      exitSuccess ))
                  "" -- "Show help"
     ]
@@ -989,7 +991,7 @@ compileInfo =
   "\nCompiled with pandoc-types " ++ VERSION_pandoc_types ++
   ", texmath " ++ VERSION_texmath ++ ", skylighting " ++
   VERSION_skylighting ++ ",\nciteproc " ++ VERSION_citeproc ++
-  ", ipynb " ++ VERSION_ipynb ++ ", hslua " ++ VERSION_hslua
+  ", ipynb " ++ VERSION_ipynb
 
 handleUnrecognizedOption :: String -> [String] -> [String]
 handleUnrecognizedOption "--smart" =
@@ -1029,20 +1031,6 @@ writersNames = sort
 
 splitField :: String -> (String, String)
 splitField = second (tailDef "true") . break (`elemText` ":=")
-
-lookupHighlightStyle :: PandocMonad m => String -> m Style
-lookupHighlightStyle s
-  | takeExtension s == ".theme" = -- attempt to load KDE theme
-    do contents <- readFileLazy s
-       case parseTheme contents of
-            Left _    -> throwError $ PandocOptionError $ T.pack $
-                           "Could not read highlighting theme " ++ s
-            Right sty -> return sty
-  | otherwise =
-  case lookup (T.toLower $ T.pack s) highlightingStyles of
-       Just sty -> return sty
-       Nothing  -> throwError $ PandocOptionError $ T.pack $
-                      "Unknown highlight-style " ++ s
 
 deprecatedOption :: String -> String -> IO ()
 deprecatedOption o msg =
